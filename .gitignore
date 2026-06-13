@@ -21,6 +21,9 @@ ui-debug.log
 *-service-account*.json
 serviceAccount*.json
 gha-creds-*.json
+*-sa.json
+prod-sa.json
+staging-sa.json
 
 # Flutter
 mobile/.dart_tool/

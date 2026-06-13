@@ -54,7 +54,12 @@ jobs:
 
       - name: Deploy to production
         run: |
-          TARGETS="firestore,storage"
+          # Firestore rules deploy on the free plan. Storage + Functions need
+          # the Blaze plan (default bucket / Cloud Functions runtime), so they
+          # are opt-in: set repo variable DEPLOY_STORAGE=true once Blaze is on,
+          # and Functions activate when functions/ is scaffolded (also Blaze).
+          TARGETS="firestore"
+          [ "${{ vars.DEPLOY_STORAGE }}" = "true" ] && TARGETS="$TARGETS,storage"
           [ -f functions/package.json ] && TARGETS="$TARGETS,functions"
           [ -d web/dist ] && TARGETS="$TARGETS,hosting"
           echo "Deploying: $TARGETS"
