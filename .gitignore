@@ -1,0 +1,37 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build output
+web/dist/
+functions/lib/
+build/
+
+# Firebase
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+*-debug.log
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+*-service-account*.json
+serviceAccount*.json
+gha-creds-*.json
+
+# Flutter
+mobile/.dart_tool/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/build/
+mobile/ios/Pods/
+mobile/android/.gradle/
+mobile/android/local.properties
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

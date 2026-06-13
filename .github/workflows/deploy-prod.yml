@@ -1,0 +1,65 @@
+name: Deploy to production
+
+# Fires only on push to main. Because main is a protected branch that requires
+# an approved PR, this effectively means "deploy after review". The optional
+# `production` GitHub Environment below adds a second manual approval gate.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Build & deploy (hosting, functions, firestore, storage)
+    runs-on: ubuntu-latest
+    environment: production   # configure required reviewers in repo Settings → Environments
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Build web
+        run: |
+          if [ -f web/package.json ]; then
+            cd web && npm ci && npm run build
+          else
+            echo "web/ not scaffolded yet — skipping"
+          fi
+
+      - name: Build functions
+        run: |
+          if [ -f functions/package.json ]; then
+            cd functions && npm ci && npm run build
+          else
+            echo "functions/ not scaffolded yet — skipping"
+          fi
+
+      # Authenticates the runner to Google Cloud using a service-account key
+      # stored in the FIREBASE_SERVICE_ACCOUNT secret. Sets
+      # GOOGLE_APPLICATION_CREDENTIALS automatically for the firebase CLI.
+      - name: Authenticate to Firebase
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Deploy to production
+        run: |
+          TARGETS="firestore,storage"
+          [ -f functions/package.json ] && TARGETS="$TARGETS,functions"
+          [ -d web/dist ] && TARGETS="$TARGETS,hosting"
+          echo "Deploying: $TARGETS"
+          npx --yes firebase-tools deploy \
+            --only "$TARGETS" \
+            --project cannon-music-prod \
+            --non-interactive \
+            --force

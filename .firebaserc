@@ -1,0 +1,7 @@
+{
+  "projects": {
+    "default": "cannon-music-prod",
+    "prod": "cannon-music-prod",
+    "staging": "cannon-music-staging"
+  }
+}
