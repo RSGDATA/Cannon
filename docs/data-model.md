@@ -377,10 +377,13 @@ interface Comment {
 
 ## 6. Ratings & scoring — the heart of the app
 
-> **SERVERLESS — NO CLOUD FUNCTIONS.** This is a locked architectural decision
-> (see [`VISION.md`](./VISION.md) §3a). Aggregation is done with Firestore
-> aggregation queries (live, on read) + a local Admin-SDK maintenance script
-> (for sortable fields). Do not propose Cloud Functions to "fix" this.
+> **PROTOTYPE = ZERO COST, NO CLOUD FUNCTIONS YET.** The prototype runs on the
+> free tier / local emulators — no paid Blaze plan (see [`VISION.md`](./VISION.md)
+> §3). Aggregation here uses Firestore aggregation queries (live, on read) + an
+> optional local Admin-SDK script for sortable fields. **Cloud Functions
+> (TypeScript) are deferred to a later phase** — they're in the owner's original
+> stack, but they require the paid Blaze plan, so they wait until the owner
+> chooses to incur cost.
 
 ### 6.1 Display scores: Firestore aggregation queries (live, on read)
 

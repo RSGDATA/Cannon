@@ -3,9 +3,11 @@ name: Deploy to production
 # Fires only on push to main. Because main is a protected branch that requires
 # an approved PR, this effectively means "deploy after review". The optional
 # `production` GitHub Environment below adds a second manual approval gate.
+# Manual-only for now. The prototype runs locally on the Firebase Emulator
+# Suite at $0 and deploys nothing to the cloud (see docs/VISION.md §3). Restore
+# the `push: branches: [main]` trigger when the owner chooses to deploy to a
+# real Firebase project.
 on:
-  push:
-    branches: [main]
   workflow_dispatch: {}
 
 permissions:

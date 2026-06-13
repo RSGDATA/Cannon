@@ -1,10 +1,10 @@
 # Cannon — Vision & Architecture
 
-> **Read this first.** This is the authoritative source of truth for what Cannon
-> is and how it's built. If you are an AI agent or a new contributor picking this
-> up cold, read this whole file before touching anything. Companion docs:
+> **Read this first.** Authoritative source of truth for what Cannon is and how
+> it's built. If you are an AI agent or new contributor picking this up cold,
+> read this whole file before touching anything. Companion docs:
 > [`data-model.md`](./data-model.md) (Firestore schema) and
-> [`deploy-setup.md`](./deploy-setup.md) (CI/CD).
+> [`deploy-setup.md`](./deploy-setup.md) (CI/CD, for *later*).
 
 ---
 
@@ -12,18 +12,14 @@
 
 **Cannon is "Rotten Tomatoes for classical music."**
 
-People rate and review classical music — but not abstractly. The core insight:
-
 > You do **not** rate "Beethoven Symphony No. 5."
 > You rate **a specific recording / performance** of it
 > (e.g. *Carlos Kleiber / Vienna Philharmonic / 1974*).
 
-- **Mobile-first.** The Flutter mobile app is the primary way people interact
-  with Cannon. The web app is secondary.
-- Users discover composers and works, then rate/review individual **recordings**,
-  build **lists** ("best Beethoven 5ths"), and discuss in **comments**.
-- Scores come in two flavors, Rotten-Tomatoes style: a **critic score**
-  (verified reviewers) and an **audience score** (everyone).
+- **Mobile-first.** The Flutter app is the primary client; the web app is secondary.
+- Users browse composers/works, rate & review individual **recordings**, build
+  **lists**, and discuss in **comments**. Scores come in two flavors:
+  **critic** (verified) and **audience** (everyone).
 
 ---
 
@@ -34,76 +30,64 @@ Composer ──▶ Work ──▶ Recording ◀── Review ◀── User
 Beethoven   Sym. 5   Kleiber/VPO/74   ★★★★★
 ```
 
-The single most important modeling rule: **a `Work` is the abstract composition;
-a `Recording` is one captured performance of it. Ratings/reviews attach to
-`Recording`, never to `Work`.** Everything in `data-model.md` flows from this.
+A `Work` is the abstract composition; a `Recording` is one captured performance.
+**Ratings/reviews attach to `Recording`, never to `Work`.** See `data-model.md`.
 
 ---
 
-## 3. Tech stack — LOCKED DECISIONS
+## 3. Guiding constraint: ZERO COST right now
 
-These are deliberate, owner-made decisions. **Do not reverse them without an
-explicit request from the owner.** (They were accidentally reversed once already
-by an agent that lacked this context — hence this document.)
+> **The owner does not want to incur or manage any cost during the prototype.**
+> Every choice below flows from that. Do not introduce anything that requires a
+> paid plan or a billing account without explicit owner approval.
 
-| Layer | Choice |
-|-------|--------|
-| Mobile app (primary) | **Flutter** |
-| Web app (secondary) | **React** (Vite), served as static files via Firebase Hosting |
-| Database | **Cloud Firestore** |
-| Auth | **Firebase Auth** |
-| Hosting | **Firebase Hosting** |
-| Backend logic | **NONE — no Cloud Functions, no Node/server backend** |
-| Search (later) | Algolia or Meilisearch |
-| Images/audio (later) | Firebase Storage — *deferred, requires Blaze plan* |
+### 3a. Tech stack (matches the owner's original brief, phased by cost)
 
-### 3a. ⛔ NO Cloud Functions. This is intentional.
+| Layer | Choice | Phase |
+|-------|--------|-------|
+| Mobile app (primary) | **Flutter** | now |
+| Web app (secondary) | **React** (Vite), static via Firebase Hosting | now |
+| Database | **Cloud Firestore** | now (**emulator**) |
+| Auth | **Firebase Auth** | now (**emulator**) |
+| Hosting | **Firebase Hosting** | now (**emulator**) |
+| Cloud Functions (TypeScript) | server-side logic / aggregation | **LATER** — needs paid Blaze plan |
+| Firebase Storage (images/audio) | — | **LATER** — needs paid Blaze plan |
+| Search (Algolia / Meilisearch) | — | **LATER** |
 
-Cannon is a **serverless, client-only** application against Firebase. There is no
-`functions/` directory, no deployed backend code, and the project deliberately
-stays on the **free Spark plan** (Cloud Functions and the Storage default bucket
-would force the paid Blaze plan).
+This is the owner's original stack. Nothing is removed — the paid pieces
+(**Cloud Functions, Storage**) are simply **deferred** until the owner chooses
+to incur cost. They are *the* things that cost money, so deferring them is how
+Cannon stays at $0.
 
-**Why you still see Node.js in the repo:** Node is *not* a backend here. It exists
-only because Firebase's own tooling runs on it:
-- The **`firebase` CLI** (`firebase-tools`) is a Node program — it's how anything
-  deploys to Firebase, locally or in CI. Unavoidable.
-- The **React web build** (Vite) uses npm. (If the web app were hand-written
-  static HTML, even this would be gone.)
+### 3b. Current phase: develop locally on the Firebase Emulator Suite
 
-Seeing `actions/setup-node` in a GitHub workflow = "install the tool that runs
-`firebase deploy`," **not** "we have a Node server." There is no contradiction
-between "only Firebase" and "Node appears in tooling."
+The prototype runs **entirely on the local machine** via the Firebase Emulator
+Suite — Firestore + Auth + Hosting on `localhost`. **No cloud project use, no
+billing account, no credit card, no cost, nothing to monitor.** The same
+Firebase SDK code later points at a real project when (if) the owner decides to
+deploy. Emulator ports are defined in `firebase.json`.
 
-### 3b. How ratings aggregate WITHOUT Cloud Functions
+> Even a deployed Firebase project on the free **Spark** plan is $0 (no card).
+> Only **Blaze** (Functions/Storage) costs money. We deploy nothing for now.
 
-The "Rotten Tomatoes" scoring is the one thing that normally wants a backend.
-Here is how it works serverlessly while staying tamper-resistant:
+### 3c. How ratings aggregate WITHOUT Cloud Functions (for the prototype)
 
-1. **Clients write only their own review.** Review doc ID is
-   `{recordingId}_{uid}`, which structurally prevents duplicate reviews.
-   Security rules forbid clients from writing *any* aggregate/score field.
-2. **Display scores are computed live with Firestore aggregation queries**
-   (`count()`, `average('rating')`) over a recording's reviews. These are
-   computed server-side from the real review documents, so a client cannot fake
-   a recording's average. Critic vs audience = the same query filtered on
-   `authorSnapshot.isCritic`.
-3. **Ranking scores** (the sortable Bayesian score used for "best recordings of
-   Work X") are written by a **local Admin-SDK maintenance script** the owner
-   runs on a schedule (manually or via their own cron). This is a script on a
-   trusted machine using the Firebase Admin SDK — **not** a deployed Cloud
-   Function. (Admin SDK scripts are the same category as the `firebase` CLI:
-   trusted tooling, not app backend.)
+Because Functions are deferred (cost), the prototype aggregates serverlessly:
 
-**Accepted tradeoffs:**
-- Ranking/leaderboard scores are **eventually consistent** — they refresh when
-  the maintenance script runs (e.g. nightly), not the instant a review lands.
-  Fine for a "best of" list.
-- **Push notifications** and **automated moderation** are **out of scope** for
-  this serverless design (they genuinely need a server). Moderation is handled
-  by user reports + manual admin action.
+1. **Clients write only their own review.** Doc ID `{recordingId}_{uid}` prevents
+   duplicates; security rules block clients from writing any aggregate field.
+2. **Display scores** (a recording's average + count) are computed live with
+   **Firestore aggregation queries** (`count()`, `average()`) over the real
+   review docs — can't be faked, works in the emulator.
+3. **Ranking scores** (sortable Bayesian score) are written by an **optional
+   local Admin-SDK script** the owner runs — a script on a trusted machine, not
+   a deployed Function.
 
-See `data-model.md` §6 for the detailed aggregation mechanics.
+When the owner later adopts Cloud Functions (their original plan), aggregation
+can move server-side. See `data-model.md` §6.
+
+**Out of scope for the prototype:** push notifications, automated moderation
+(both need a server). Moderation = user reports + manual admin action for now.
 
 ---
 
@@ -111,56 +95,46 @@ See `data-model.md` §6 for the detailed aggregation mechanics.
 
 | Thing | Value / status |
 |-------|----------------|
-| Firebase project | **`cannon-music-prod`** (`cannon-prod` was taken globally) |
-| Billing plan | **Spark (free)** — stays free; no Functions/Storage default bucket |
-| Firestore database | ⚠️ **not yet created** (Firestore API needs enabling on the project) |
-| GitHub repo | **`RSGDATA/Cannon`** — **public** |
-| CI secret | `FIREBASE_SERVICE_ACCOUNT` set (firebase-adminsdk key) |
-| Branch protection | on `main`: 1 approving review required |
-| Deploy pipeline | `.github/workflows/deploy-prod.yml` → deploys Firestore rules/indexes (+ Hosting once `web/` is scaffolded) on push to `main` |
-| `web/` (React) | **not scaffolded yet** |
-| `mobile/` (Flutter) | **not scaffolded yet** |
-
-### Single-project setup
-One Firebase project (`cannon-music-prod`) serves production. PR preview channels
-use the same project (preview channels are isolated temp URLs). A `staging` alias
-is reserved in `.firebaserc` but unused — add a staging project later if wanted.
+| **Dev target** | **Firebase Emulator Suite (local) — $0, no cloud** |
+| Firebase project (exists, **unused for now**) | `cannon-music-prod` — created earlier; not provisioned, not deployed to |
+| Billing | **none — Spark/free, no card; Blaze never enabled** |
+| GitHub repo | `RSGDATA/Cannon` (public) |
+| Cloud deploy pipeline | **set up but disabled (manual-only)** — `deploy-prod.yml` no longer auto-runs; re-enable when ready to deploy |
+| `web/` (React) | not scaffolded yet |
+| `mobile/` (Flutter) | not scaffolded yet |
 
 ---
 
 ## 5. Roadmap / phases
 
-- **Phase 0 — Foundation (in progress):** repo, CI/CD, Firebase project, data
-  model, this vision doc. Enable Firestore API + create the database.
-- **Phase 1 — Catalog + reads:** seed composers/works/recordings; React + Flutter
-  apps that browse the catalog. Firebase Auth login.
-- **Phase 2 — Reviews:** users write reviews/ratings (deterministic IDs, rules
-  enforce ownership). Display scores via aggregation queries.
-- **Phase 3 — Ranking + lists:** maintenance script computes Bayesian scores;
-  "best of" lists; user lists; comments.
-- **Phase 4 — Search:** Algolia/Meilisearch. **Storage** (album art) if Blaze is
-  acceptable by then.
+- **Phase 0 — Foundation (in progress):** repo, data model, this doc, local
+  emulator config. **No cloud.**
+- **Phase 1 — Prototype on emulators ($0):** scaffold React + Flutter against the
+  emulator suite; seed catalog data locally; browse composers/works/recordings;
+  Auth login. Reviews with deterministic IDs; display scores via aggregation
+  queries.
+- **Phase 2 — Go online (owner's call):** deploy to the free Spark project
+  (still $0) when the owner wants a shareable URL.
+- **Phase 3 — Paid features (owner's call, costs money):** enable Blaze → Cloud
+  Functions for server-side aggregation (original plan), Firebase Storage for
+  images. Then Algolia search.
 
 ---
 
 ## 6. Guardrails for the next agent
 
-- **Do not add Cloud Functions / a Node backend.** It's a locked decision (§3a).
-  If a task seems to "need" a Function, prefer: aggregation queries, security
-  rules, deterministic IDs, or a local Admin-SDK maintenance script.
-- **Do not enable the Blaze plan** without explicit owner approval (it's a
-  billing change).
+- **Do not introduce anything that costs money** or requires the Blaze plan
+  (Cloud Functions deploy, Storage) without explicit owner approval. Zero-cost is
+  the active constraint (§3).
+- **Default to the local emulator suite**, not a live cloud project.
+- Cloud Functions are **deferred, not deleted** — they're in the owner's original
+  stack for later. For the prototype, prefer aggregation queries / a local script.
 - **Keep `Work` and `Recording` separate.** Ratings live on recordings.
 - **Clients never write aggregate/score fields** — enforce in security rules.
-- The `firebase` CLI and Admin-SDK scripts are authenticated as
-  `rgviolin1234@gmail.com` / via the `FIREBASE_SERVICE_ACCOUNT` secret in CI.
 
 ---
 
 ## 7. Open decisions (not yet locked)
 
-These are noted in `data-model.md` §9 and still need owner input:
-1. **Rating scale** — 5 whole stars vs 1–10 (half-star nuance). Affects types
-   everywhere.
-2. **Critic verification** — how a user becomes a verified `critic`.
-3. Per-movement ratings; following/activity feed scope; multi-composer works.
+See `data-model.md` §9. Notably: rating scale (5 stars vs 1–10), critic
+verification, per-movement ratings, following/activity feed, multi-composer works.
