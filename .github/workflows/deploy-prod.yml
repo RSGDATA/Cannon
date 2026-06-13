@@ -26,7 +26,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
+        # npm caching intentionally omitted until web/ or functions/ is
+        # scaffolded — setup-node's cache step fails when no lock file exists.
 
       - name: Build web
         run: |
@@ -34,14 +35,6 @@ jobs:
             cd web && npm ci && npm run build
           else
             echo "web/ not scaffolded yet — skipping"
-          fi
-
-      - name: Build functions
-        run: |
-          if [ -f functions/package.json ]; then
-            cd functions && npm ci && npm run build
-          else
-            echo "functions/ not scaffolded yet — skipping"
           fi
 
       # Authenticates the runner to Google Cloud using a service-account key
@@ -54,13 +47,12 @@ jobs:
 
       - name: Deploy to production
         run: |
-          # Firestore rules deploy on the free plan. Storage + Functions need
-          # the Blaze plan (default bucket / Cloud Functions runtime), so they
-          # are opt-in: set repo variable DEPLOY_STORAGE=true once Blaze is on,
-          # and Functions activate when functions/ is scaffolded (also Blaze).
+          # Serverless: NO Cloud Functions (see docs/VISION.md). Firestore rules
+          # deploy on the free plan. Storage needs the Blaze plan (default
+          # bucket), so it's opt-in: set repo variable DEPLOY_STORAGE=true once
+          # Blaze is enabled. Hosting activates once web/ is scaffolded.
           TARGETS="firestore"
           [ "${{ vars.DEPLOY_STORAGE }}" = "true" ] && TARGETS="$TARGETS,storage"
-          [ -f functions/package.json ] && TARGETS="$TARGETS,functions"
           [ -d web/dist ] && TARGETS="$TARGETS,hosting"
           echo "Deploying: $TARGETS"
           npx --yes firebase-tools deploy \

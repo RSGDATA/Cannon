@@ -1,4 +1,4 @@
-# Canon — Data Model
+# Cannon — Data Model
 
 > "Rotten Tomatoes for classical music."
 > Firestore data model design. **Status: draft for review.** No code yet.
@@ -76,13 +76,14 @@ not a person, and has different fields (founded year, members, type).
   server timestamp.
 - **Denormalization:** child docs cache the *display* fields of their parents
   (name, title, cover) so a screen renders from one query, not N. The source of
-  truth is the parent; a Cloud Function fans out updates when a parent's display
+  truth is the parent; the maintenance script (§6.3) fans out updates when a parent's display
   field changes (rare). See §7.
 - **Soft delete:** user content (`reviews`, `comments`, `lists`) uses a
   `deleted: boolean` + `deletedAt` rather than hard delete, so threads and
   aggregates stay consistent. Catalog entities are admin-only and hard-deleted.
-- **TS interfaces below** live in `shared/` and are imported by both Functions
-  and (via codegen / hand-mirror) the Flutter + React clients.
+- **TS interfaces below** live in `shared/` and are imported by the React client
+  and the maintenance script (and mirrored as Dart models in Flutter). There is
+  no Functions backend to import them.
 
 ---
 
@@ -105,7 +106,7 @@ interface Composer {
   deathYear?: number | null;
   portraitUrl?: string;       // Firebase Storage
   bio?: string;               // markdown
-  // denormalized aggregates (maintained by functions)
+  // denormalized aggregates (maintained by the maintenance script)
   workCount: number;
   recordingCount: number;
   createdAt: Timestamp;
@@ -135,7 +136,7 @@ interface Work {
   yearComposed?: number;
   instrumentation?: string[]; // ["orchestra"] or ["piano"], ["violin","piano"]
   movements?: { no: number; title: string; tempo?: string }[];
-  // aggregates rolled up from recordings (maintained by functions)
+  // aggregates rolled up from recordings (maintained by the maintenance script)
   recordingCount: number;
   topRecordingId?: string;    // highest-scored recording, for "best of" links
   avgRating?: number;         // mean across all recordings' reviews (informational)
@@ -217,7 +218,7 @@ interface Recording {
     youtube?: string;
   };
 
-  // --- aggregates (maintained ONLY by Cloud Functions; clients never write) ---
+  // --- aggregates (maintained ONLY by the Admin-SDK maintenance script; clients never write) ---
   stats: RecordingStats;
 
   createdAt: Timestamp;
@@ -249,7 +250,7 @@ interface RecordingStats {
 > **`artistIds` / `ensembleIds`:** Firestore can't query inside the rich
 > `credits[]` objects. The flat ID arrays exist purely so
 > `where('artistIds','array-contains','kleiber-carlos')` powers an artist's
-> "Recordings" page. Functions keep them in sync with `credits`.
+> "Recordings" page. The maintenance script keeps them in sync with `credits`.
 
 ---
 
@@ -376,55 +377,85 @@ interface Comment {
 
 ## 6. Ratings & scoring — the heart of the app
 
-### 6.1 Aggregation: how a recording's stats stay correct
+> **SERVERLESS — NO CLOUD FUNCTIONS.** This is a locked architectural decision
+> (see [`VISION.md`](./VISION.md) §3a). Aggregation is done with Firestore
+> aggregation queries (live, on read) + a local Admin-SDK maintenance script
+> (for sortable fields). Do not propose Cloud Functions to "fix" this.
 
-All writes to `recordings.stats` happen in a Cloud Function reacting to review
-changes. Clients **never** write `stats` (security rules forbid it).
+### 6.1 Display scores: Firestore aggregation queries (live, on read)
 
-`onReviewWrite` (Firestore trigger on `reviews/{id}` create/update/delete):
+A recording's **average rating and review count are NOT stored** as a
+client-writable field. They are computed **on read** with Firestore
+**aggregation queries** over the recording's reviews:
 
-| Event | Effect on `recordings/{recordingId}.stats` (one transaction) |
-|-------|--------------------------------------------------------------|
-| create | `ratingCount += 1`, `ratingSum += rating`, `histogram[rating] += 1`, bump critic/audience bucket, recompute `avgRating`, scores |
-| update (rating changed) | adjust sums by **delta**, move histogram bucket |
-| delete / soft-delete | reverse the create |
+```ts
+// average + count for a recording, server-computed from real review docs
+const q = query(collection(db, 'reviews'),
+                where('recordingId', '==', recordingId),
+                where('deleted', '==', false));
+const agg = await getAggregateFromServer(q, {
+  count: count(),
+  avg: average('rating'),
+});
+```
 
-Use `FieldValue.increment()` inside a transaction so concurrent reviews don't
-clobber each other. Keeping `ratingSum` (not just avg) is what makes the
-increment approach exact — you never recompute from scratch.
+Because the aggregation runs server-side over the actual review documents, a
+client **cannot fake** a recording's score — there is no stored number to tamper
+with. The **critic vs audience** split is the same query with an added
+`where('authorSnapshot.isCritic', '==', true / false)`.
 
-### 6.2 The two scores (Rotten Tomatoes parallel)
+Both scores are expressed 0–100 for display: `score = (avg − 1) / 4 * 100`
+(for a 1–5 scale; adjust if the scale changes — see §9).
 
-- **criticScore** — aggregate from `role: 'critic'` users only.
-- **audienceScore** — aggregate from everyone else.
+### 6.2 No duplicate reviews, no client-written aggregates
 
-Both expressed 0–100. A 5-star → 100, mapping `score = (avg − 1) / 4 * 100`.
+- **Duplicate prevention** is structural: review doc ID is `{recordingId}_{uid}`,
+  so a user can only ever have one review per recording. No server logic needed.
+- **Security rules forbid clients from writing any aggregate/score field.**
+  Clients write only their own review (`rating`, `body`, a few flags). See §8.
 
-### 6.3 Ranking score (`bayesScore`) — why a single 5★ shouldn't win
+### 6.3 Ranking score (`bayesScore`): a local maintenance script
 
-A naive average lets a recording with one 5★ review outrank a beloved classic
-with 400 reviews averaging 4.7. Use a **Bayesian (weighted) average** as the
-sort key for "best recordings of Work X":
+Aggregation queries are perfect for *displaying one recording*, but you can't
+efficiently **sort all recordings of a Work by a computed average** that lives
+only at read time. Sorting needs a **stored, indexable** number.
+
+A naive average also lets a recording with one 5★ review outrank a classic with
+400 reviews at 4.7. So the sort key is a **Bayesian (weighted) average**:
 
 ```
 bayesScore = (v / (v + m)) * R  +  (m / (v + m)) * C
 
-  v = this recording's ratingCount
-  R = this recording's avgRating
+  v = this recording's ratingCount   (from an aggregation query)
+  R = this recording's avgRating      (from an aggregation query)
   m = minimum reviews for confidence (tunable, e.g. 10)
-  C = global mean rating across all recordings (a config doc, refreshed nightly)
+  C = global mean rating across all recordings
 ```
 
-With few reviews the score is pulled toward the global mean `C`; with many it
-trusts the recording's own `R`. `m` and `C` live in `config/scoring` and are
-refreshed by a scheduled function. This is the number `works.topRecordingId`
-and all "best of" sorts are based on.
+**How it gets written (no Cloud Function):** a **local Node maintenance script**
+using the Firebase **Admin SDK**, run by the owner on a schedule (manually, or
+the owner's own cron). It:
 
-### 6.4 Roll-up to Work
+1. computes `C` (global mean) across all reviews,
+2. for each recording, runs the count/avg aggregation, computes `bayesScore`,
+   and writes `stats` + `bayesScore` to the recording doc (Admin SDK bypasses
+   security rules — that's why only this trusted script may write these fields),
+3. rolls up `works` (`recordingCount`, `avgRating`, `topRecordingId` = max
+   `bayesScore`) and `composers` counts.
 
-`onRecordingStatsChange` recomputes the parent `works` doc's `recordingCount`,
-`avgRating`, and `topRecordingId` (= recording with max `bayesScore`). Composer
-counts roll up similarly when works/recordings are added.
+This is the same category of tool as the `firebase` CLI — trusted local tooling,
+**not** deployed app backend. Lives at e.g. `scripts/recompute-scores.ts`.
+
+**Tradeoff:** ranking/leaderboard values are **eventually consistent** — they
+update when the script runs (e.g. nightly), not the instant a review lands. Live
+per-recording display scores (§6.1) are always current; only the *sortable* roll-ups lag.
+
+### 6.4 `RecordingStats` is script-owned, read-only to clients
+
+The `stats` block on a recording (and `works` roll-ups) is written **only** by
+the maintenance script. Clients read it for sorting/leaderboards but can never
+write it (enforced in rules). For an always-fresh single-recording score, clients
+use the §6.1 aggregation query rather than trusting stored `stats`.
 
 ---
 
@@ -441,9 +472,12 @@ is acceptable.
 | `user.displayName/photoURL` | that user's `reviews.authorSnapshot`, `comments.authorSnapshot` |
 | `recording` cover/primary artist | that recording's `reviews.recordingSnapshot` |
 
-Handled by triggered functions. For high-cardinality fan-out (a prolific user's
-thousands of reviews) batch in chunks of 500 or queue via Tasks. Acceptable
-because these edits are infrequent.
+Handled by the **local Admin-SDK maintenance script** (same one as §6.3), not a
+Cloud Function. Because these source edits are *rare* (an admin fixing a
+composer's name), refreshing the denormalized copies on the next script run — or
+a targeted one-off script invocation — is fine. For high-cardinality fan-out (a
+prolific user's thousands of reviews) the script batches writes in chunks of 500.
+Brief staleness of a cached display name between edit and script run is acceptable.
 
 ---
 
@@ -454,11 +488,14 @@ users/{uid}            read: all; write: request.auth.uid == uid (limited fields
 users/{uid}/private/*  read,write: owner only
 composers, works,
 artists, ensembles,
-recordings             read: all; write: role in {moderator, admin}
-recordings.stats       write: never from client (functions via Admin SDK bypass rules)
+recordings             read: all; write: role in {moderator, admin};
+                       recordings.stats / bayesScore: NEVER from client
+                       (only the Admin-SDK maintenance script writes these —
+                        Admin SDK bypasses rules)
 reviews/{rid_uid}      read: all (non-deleted);
                        create/update: auth.uid == uid AND id == rid+'_'+uid
-                                      AND incoming has no stats/snapshot tampering
+                                      AND request only touches rating/body/flags
+                                      (no stats/snapshot/count tampering)
                        delete: owner or moderator (soft delete)
 lists                  read: visibility=='public' OR owner; write: owner
 comments               read: all (non-deleted); create: any auth user;
@@ -466,9 +503,11 @@ comments               read: all (non-deleted); create: any auth user;
 ```
 
 Clients write only `rating` + `body` (+ a few flags) on reviews. All derived
-data (`stats`, snapshots, counts) is function-owned and rule-blocked from
-clients — this is exactly the "controlled, calculated, validated, or hidden
-from the client" boundary from your brief.
+data (`stats`, `bayesScore`, snapshots, counts) is **script-owned** and
+rule-blocked from clients. There is **no Cloud Function** — the trust boundary is
+held by (a) security rules that reject client writes to derived fields, (b)
+live aggregation queries computed server-side from real review docs (§6.1), and
+(c) the trusted local Admin-SDK script for sortable roll-ups (§6.3).
 
 ---
 
@@ -494,11 +533,13 @@ from the client" boundary from your brief.
 - **Algolia/Meilisearch:** index `works`, `recordings`, `composers`, `artists`,
   `ensembles`. Searchable fields are already denormalized onto each doc
   (composer + work + performer names all live on the recording), so the search
-  record is a near-direct projection. A function syncs on write.
-- **Cloud Functions inventory** this model implies:
-  `onReviewWrite` (aggregate stats) · `onRecordingStatsChange` (roll up to work)
-  · `onCatalogDisplayChange` (denormalization fan-out) · `refreshScoringConfig`
-  (scheduled, computes global mean `C`) · `syncSearchIndex` · `onUserProfileChange`.
-- **`shared/` types:** every interface above becomes a TS type consumed by
-  Functions and the React app; mirrored as Dart models in Flutter.
+  record is a near-direct projection. The **maintenance script** pushes records
+  to the search index (no Cloud Function); acceptable since the catalog changes
+  slowly.
+- **Maintenance script** (`scripts/`, Admin SDK, run by owner — NOT a deployed
+  Function) owns all derived data: recompute `bayesScore` + roll-ups (§6.3),
+  denormalization fan-out (§7), and search-index sync. This is the only
+  "backend" Cannon has, and it runs on a trusted machine, not in the cloud.
+- **`shared/` types:** every interface above becomes a TS type consumed by the
+  React app + the maintenance script; mirrored as Dart models in Flutter.
 ```
