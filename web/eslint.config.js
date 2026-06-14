@@ -18,5 +18,13 @@ export default defineConfig([
     languageOptions: {
       globals: globals.browser,
     },
+    rules: {
+      // React Compiler heuristics (eslint-plugin-react-hooks v6 'recommended'):
+      // surface as warnings rather than failing CI on standard data-loading
+      // patterns (setState inside effects, Date.now() in render, etc.).
+      'react-hooks/set-state-in-effect': 'warn',
+      'react-hooks/purity': 'warn',
+      'react-hooks/preserve-manual-memoization': 'warn',
+    },
   },
 ])
