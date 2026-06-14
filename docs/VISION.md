@@ -1,4 +1,4 @@
-# New Cannon — Vision & Architecture
+# New Canon — Vision & Architecture
 
 > **Read this first.** Authoritative source of truth for what the project is and
 > how it's built. If you are an AI agent or new contributor picking this up cold,
@@ -8,7 +8,7 @@
 
 ## 1. The product
 
-**New Cannon is "Rotten Tomatoes for classical music."**
+**New Canon is "Rotten Tomatoes for classical music."**
 
 > You do **not** rate "Beethoven Symphony No. 5." You rate **a specific
 > recording/performance** of it (e.g. *Carlos Kleiber / Vienna Philharmonic / 1974*).

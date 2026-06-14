@@ -244,7 +244,7 @@ export default function App() {
   return (
     <>
       <nav className="nav">
-        <div className="nav-brand" style={{ cursor: 'pointer' }} onClick={() => { setTab('home'); setSelectedId(null); setConcertId(null) }}><span>New Cannon</span></div>
+        <div className="nav-brand" style={{ cursor: 'pointer' }} onClick={() => { setTab('home'); setSelectedId(null); setConcertId(null) }}><span>New Canon</span></div>
         <div className="nav-links">
           <a className="nav-link" style={{ cursor: 'pointer' }} onClick={() => { setTab('home'); setSelectedId(null); setConcertId(null) }}>Recordings</a>
           <a className="nav-link" style={{ cursor: 'pointer' }} onClick={() => { setTab('concerts'); setSelectedId(null); setConcertId(null) }}>Concerts</a>
