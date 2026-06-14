@@ -228,6 +228,77 @@ a { color: inherit; text-decoration: none; }
 .review-date { font-size: 12px; color: var(--muted); }
 .review-body { margin: 8px 0 0; font-size: 14.5px; line-height: 1.55; color: #2c2b31; }
 
+/* ---------- pending banner ---------- */
+.pending-banner {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  margin: 16px clamp(14px, 4vw, 40px) 0; padding: 14px 20px;
+  background: linear-gradient(100deg, #2a1530, #4a1d3e); color: #fff;
+  border-radius: 14px; cursor: pointer; font-weight: 600; font-size: 14px;
+  box-shadow: 0 8px 24px rgba(74, 29, 62, 0.3); animation: fadeUp 0.5s ease both;
+}
+.pending-banner:hover { filter: brightness(1.1); }
+.pending-cta { font-weight: 800; white-space: nowrap; background: rgba(255, 255, 255, 0.16); padding: 6px 12px; border-radius: 999px; }
+
+/* ---------- concerts list ---------- */
+.concerts { animation: fadeUp 0.5s ease both; }
+.code-card {
+  margin: 18px clamp(14px, 4vw, 40px) 0; padding: 22px clamp(18px, 3vw, 28px);
+  background: linear-gradient(120deg, #7a1f2b, #3a1018); color: #fff; border-radius: 18px;
+  display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap;
+  box-shadow: 0 12px 30px rgba(58, 16, 24, 0.3);
+}
+.code-title { font-family: var(--serif); font-size: 22px; font-weight: 800; margin: 0; }
+.code-sub { margin: 4px 0 0; font-size: 13px; opacity: 0.9; max-width: 420px; }
+.code-entry { display: flex; gap: 8px; }
+.code-entry input { font: inherit; font-size: 15px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; padding: 11px 14px; width: 170px; border: none; border-radius: 10px; background: rgba(255, 255, 255, 0.95); color: var(--ink); }
+.code-msg { width: 100%; font-size: 13px; opacity: 0.92; margin-top: 2px; }
+
+.concerts-head { padding: 26px clamp(14px, 4vw, 40px) 6px; justify-content: space-between; }
+.concert-search { font: inherit; font-size: 13px; padding: 9px 14px; border: 1px solid var(--line); border-radius: 999px; background: var(--bg-alt); width: clamp(150px, 30vw, 280px); }
+.concert-list { display: grid; gap: 12px; padding: 8px clamp(14px, 4vw, 40px) 60px; }
+.concert-card {
+  display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 18px;
+  background: #fff; border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 14px;
+  padding: 14px 18px; cursor: pointer; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
+  transition: transform 0.14s, box-shadow 0.16s;
+}
+.concert-card:hover { transform: translateX(3px); box-shadow: 0 8px 22px rgba(0, 0, 0, 0.08); }
+.concert-card.ph-live { border-left-color: var(--green); }
+.concert-card.ph-upcoming { border-left-color: var(--red); }
+.concert-card.ph-past { border-left-color: #c9c7cf; }
+.concert-date { text-align: center; width: 50px; }
+.cd-month { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.6px; color: var(--red); }
+.cd-day { font-family: var(--serif); font-size: 26px; font-weight: 800; line-height: 1; }
+.concert-status { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: #c9c7cf; }
+.status-dot.live { background: var(--green); animation: pulse 1.6s infinite; }
+.status-dot.upcoming { background: var(--red); }
+@keyframes pulse { 0%, 100% { box-shadow: 0 0 0 3px rgba(24, 165, 88, 0.25); } 50% { box-shadow: 0 0 0 7px rgba(24, 165, 88, 0.04); } }
+.concert-title { font-family: var(--serif); font-size: 18px; font-weight: 800; margin-top: 2px; }
+.concert-sub { font-size: 12.5px; color: var(--muted); margin-top: 1px; }
+.concert-prog { font-size: 12.5px; color: #4a4954; margin-top: 4px; }
+.concert-cta { font-size: 22px; color: var(--muted); }
+
+/* ---------- concert detail / prompts ---------- */
+.checked-badge { display: inline-block; margin-top: 12px; font-size: 12.5px; font-weight: 700; background: rgba(255, 255, 255, 0.18); padding: 5px 12px; border-radius: 999px; }
+.program { margin: 0; padding-left: 20px; display: grid; gap: 8px; }
+.prog-title { font-weight: 700; font-size: 15px; }
+.prog-composer { display: block; font-size: 12.5px; color: var(--muted); }
+.prompt-intro { font-size: 14.5px; line-height: 1.55; color: #3a3942; margin: 0 0 16px; }
+.piece-list { display: grid; gap: 10px; margin-bottom: 16px; }
+.piece { border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; }
+.piece-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.piece-title { font-weight: 700; font-size: 14.5px; }
+.piece-by { font-size: 12px; color: var(--muted); }
+.seg { display: inline-flex; background: var(--bg-alt); border-radius: 10px; padding: 3px; flex: 0 0 auto; }
+.seg-btn { font: inherit; font-weight: 700; font-size: 12.5px; padding: 6px 12px; border: none; background: none; border-radius: 8px; cursor: pointer; color: var(--muted); }
+.seg-btn.active { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1); }
+.piece-rate { margin-top: 10px; display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); }
+.prompt textarea { width: 100%; font: inherit; font-size: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; resize: vertical; background: var(--bg-alt); margin: 10px 0 14px; }
+.prompt textarea:focus { outline: none; border-color: #f6a98f; background: #fff; }
+.prompt-done { text-align: center; }
+.big-check { width: 56px; height: 56px; margin: 0 auto 6px; border-radius: 50%; background: var(--green); color: #fff; font-size: 30px; display: grid; place-items: center; box-shadow: 0 8px 20px rgba(24, 165, 88, 0.3); }
+
 @media (prefers-reduced-motion: reduce) {
   *, .hero, .row, .card, .hero-cover, .hero::before, .detail, .detail-hero, .detail-hero::before { animation: none !important; transition: none !important; }
 }

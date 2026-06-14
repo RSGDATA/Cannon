@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from './lib/supabase'
 import RecordingDetail from './RecordingDetail'
+import Concerts from './Concerts'
+import ConcertDetail from './ConcertDetail'
 
 type Review = { rating: number; author_id: string; profiles: { role: string } | null }
 type Credit = { artists: { name: string } | null; ensembles: { name: string } | null }
@@ -177,6 +179,9 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [q, setQ] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [concertId, setConcertId] = useState<string | null>(null)
+  const [tab, setTab] = useState<'home' | 'concerts'>('home')
+  const [pending, setPending] = useState<{ id: string; title: string; kind: 'pre' | 'post' } | null>(null)
 
   const loadCatalog = useCallback(async () => {
     const { data, error } = await supabase.from('composers').select(CATALOG_SELECT).order('sort_name')
@@ -199,6 +204,23 @@ export default function App() {
     return () => sub.subscription.unsubscribe()
   }, [])
   useEffect(() => { loadCatalog() }, [loadCatalog])
+
+  useEffect(() => {
+    if (!session?.user) { setPending(null); return }
+    supabase.from('concert_checkins')
+      .select('pre_done,post_done,concerts(id,title,starts_at,ends_at)')
+      .eq('user_id', session.user.id)
+      .then(({ data }) => {
+        const now = Date.now()
+        const rows = (data ?? []) as unknown as { pre_done: boolean; post_done: boolean; concerts: { id: string; title: string; starts_at: string; ends_at: string } | null }[]
+        const post = rows.filter((r) => r.concerts && now > new Date(r.concerts.ends_at).getTime() && !r.post_done)
+          .sort((a, b) => new Date(b.concerts!.ends_at).getTime() - new Date(a.concerts!.ends_at).getTime())
+        const pre = rows.filter((r) => r.concerts && now <= new Date(r.concerts.ends_at).getTime() && !r.pre_done)
+          .sort((a, b) => new Date(a.concerts!.starts_at).getTime() - new Date(b.concerts!.starts_at).getTime())
+        const first = post[0] ?? pre[0]
+        setPending(first ? { id: first.concerts!.id, title: first.concerts!.title, kind: post[0] ? 'post' : 'pre' } : null)
+      })
+  }, [session?.user, concertId])
 
   async function rate(recordingId: string, rating: number) {
     if (!session?.user) return
@@ -236,10 +258,10 @@ export default function App() {
   return (
     <>
       <nav className="nav">
-        <div className="nav-brand"><span>New Cannon</span></div>
+        <div className="nav-brand" style={{ cursor: 'pointer' }} onClick={() => { setTab('home'); setSelectedId(null); setConcertId(null) }}><span>New Cannon</span></div>
         <div className="nav-links">
-          <a className="nav-link" href="#">Recordings</a>
-          <a className="nav-link" href="#">Composers</a>
+          <a className="nav-link" style={{ cursor: 'pointer' }} onClick={() => { setTab('home'); setSelectedId(null); setConcertId(null) }}>Recordings</a>
+          <a className="nav-link" style={{ cursor: 'pointer' }} onClick={() => { setTab('concerts'); setSelectedId(null); setConcertId(null) }}>Concerts</a>
         </div>
         <div className="nav-search">
           <span className="mag">🔍</span>
@@ -248,10 +270,20 @@ export default function App() {
         <NavAuth session={session} />
       </nav>
 
-      {selectedId ? (
+      {concertId ? (
+        <ConcertDetail id={concertId} session={session} onBack={() => setConcertId(null)} />
+      ) : selectedId ? (
         <RecordingDetail id={selectedId} session={session} onBack={() => { setSelectedId(null); loadCatalog() }} />
+      ) : tab === 'concerts' ? (
+        <Concerts session={session} onOpen={(cid) => setConcertId(cid)} />
       ) : (
       <>
+      {pending && (
+        <div className="pending-banner" onClick={() => setConcertId(pending.id)}>
+          <span>🎫 {pending.kind === 'post' ? `How was “${pending.title}”? Tell us how the concert went.` : `You're going to “${pending.title}” — mark which pieces you already know.`}</span>
+          <span className="pending-cta">Open →</span>
+        </div>
+      )}
       {loading && <p className="notice" style={{ paddingTop: 24 }}>Loading catalog…</p>}
       {error && <p className="err-block" style={{ paddingTop: 24 }}>Error: {error}</p>}
 
