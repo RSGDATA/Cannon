@@ -174,7 +174,7 @@ export default function ConcertDetail({ id, session, onBack }: { id: string; ses
             <p className="prompt-intro">Here’s tonight’s program. <strong>Have you heard any of these before?</strong> Mark the ones you know and rate them — we’ll ask what you thought afterward.</p>
             <div className="piece-list">
               {program.map((p) => {
-                const r = resp[p.works.id] ?? {}
+                const r: PieceResp = resp[p.works.id] ?? { heard_before: null, prior_rating: null, live_rating: null }
                 return (
                   <div className="piece" key={p.works.id}>
                     <div className="piece-head">
@@ -201,7 +201,7 @@ export default function ConcertDetail({ id, session, onBack }: { id: string; ses
             <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={3} placeholder="How was the evening? The hall, the playing, the atmosphere…" />
             <div className="piece-list" style={{ marginTop: 4 }}>
               {program.map((p) => {
-                const r = resp[p.works.id] ?? {}
+                const r: PieceResp = resp[p.works.id] ?? { heard_before: null, prior_rating: null, live_rating: null }
                 return (
                   <div className="piece" key={p.works.id}>
                     <div className="piece-head">
