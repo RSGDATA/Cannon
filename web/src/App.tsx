@@ -67,7 +67,7 @@ function Card({ item, myId, session, onRate }: { item: Item; myId?: string; sess
         </div>
       </div>
       <div className="scores">
-        <Pill icon="🍅" pct={s.critic} />
+        <Pill icon="🎼" pct={s.critic} />
         <Pill icon="🎧" pct={s.audience} />
       </div>
       <div className="card-title">{performers(rec)}</div>
@@ -192,7 +192,7 @@ export default function App() {
   return (
     <>
       <nav className="nav">
-        <div className="nav-brand"><span className="logo">🍅</span> <span>Ca<span className="rt">nn</span>on</span></div>
+        <div className="nav-brand"><span>New Cannon</span></div>
         <div className="nav-links">
           <a className="nav-link" href="#">Recordings</a>
           <a className="nav-link" href="#">Composers</a>
