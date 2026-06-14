@@ -71,7 +71,7 @@ export default function Concerts({ session, onOpen }: { session: Session | null;
       {err && <p className="err-block">{err}</p>}
       <div className="concert-list">
         {filtered.map((c) => {
-          const ph = phaseOf(c); const dt = new Date(c.starts_at)
+          const ph = phaseOf(c); const dt = new Date(c.starts_at); const sc = scores[c.id]
           return (
             <article className={`concert-card ph-${ph}`} key={c.id} onClick={() => onOpen(c.id)}>
               <div className="concert-date">
@@ -85,7 +85,7 @@ export default function Concerts({ session, onOpen }: { session: Session | null;
                 <div className="concert-prog">{c.concert_program.map((p) => p.works.title).join('  •  ')}</div>
               </div>
               <div className="concert-cta">
-                {scores[c.id] && <span className="concert-score" title={`${scores[c.id].ratings} ratings`}>{pct(scores[c.id].avg_rating)}%</span>}
+                {sc && <span className="concert-score" title={`${sc.ratings} ratings`}>{pct(sc.avg_rating)}%</span>}
                 <span className="cgo">→</span>
               </div>
             </article>

@@ -146,15 +146,18 @@ export default function ConcertDetail({ id, session, onBack }: { id: string; ses
         <section className="panel">
           <h2 className="panel-title">Program</h2>
           <ol className="program">
-            {program.map((p) => (
-              <li key={p.works.id}>
-                <span className="prog-title">{p.works.title}</span>
-                <span className="prog-composer">{p.works.composers?.name}{p.works.catalog_system ? ` · ${p.works.catalog_system} ${p.works.catalog_number}` : ''}</span>
-                {pieceScore[p.works.id]?.live_avg != null && (
-                  <span className="prog-score">{pct(pieceScore[p.works.id].live_avg)}% live · {pieceScore[p.works.id].live_count} rated</span>
-                )}
-              </li>
-            ))}
+            {program.map((p) => {
+              const ps = pieceScore[p.works.id]
+              return (
+                <li key={p.works.id}>
+                  <span className="prog-title">{p.works.title}</span>
+                  <span className="prog-composer">{p.works.composers?.name}{p.works.catalog_system ? ` · ${p.works.catalog_system} ${p.works.catalog_number}` : ''}</span>
+                  {ps && ps.live_avg != null && (
+                    <span className="prog-score">{pct(ps.live_avg)}% live · {ps.live_count} rated</span>
+                  )}
+                </li>
+              )
+            })}
           </ol>
         </section>
 
