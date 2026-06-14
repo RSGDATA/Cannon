@@ -29,12 +29,30 @@ function scores(r: Recording) {
   return { critic: pctOf(critic), audience: pctOf(audience), overall }
 }
 
+function useCountUp(target: number | null, ms = 900) {
+  const [v, setV] = useState(0)
+  useEffect(() => {
+    if (target == null) { setV(0); return }
+    let raf = 0
+    const start = performance.now()
+    const tick = (t: number) => {
+      const p = Math.min(1, (t - start) / ms)
+      setV(Math.round(target * (1 - Math.pow(1 - p, 3))))
+      if (p < 1) raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [target, ms])
+  return v
+}
+
 function Pill({ icon, pct }: { icon: string; pct: number | null }) {
   const cls = pct == null ? 'none' : pct >= 60 ? 'fresh' : 'rotten'
+  const n = useCountUp(pct)
   return (
     <span className={`pill ${cls}`}>
       <span className="ic">{icon}</span>
-      <span className="v">{pct == null ? '—' : `${pct}%`}</span>
+      <span className="v">{pct == null ? '—' : `${n}%`}</span>
     </span>
   )
 }
@@ -49,13 +67,13 @@ function Stars({ value, onRate }: { value: number; onRate: (n: number) => void }
   )
 }
 
-function Card({ item, myId, session, onRate }: { item: Item; myId?: string; session: Session | null; onRate: (id: string, n: number) => void }) {
+function Card({ item, myId, session, onRate, i = 0 }: { item: Item; myId?: string; session: Session | null; onRate: (id: string, n: number) => void; i?: number }) {
   const { rec, work, composer } = item
   const s = scores(rec)
   const era = composer.era ?? 'default'
   const mine = rec.reviews.find((x) => x.author_id === myId)?.rating ?? 0
   return (
-    <div className="card">
+    <div className="card" style={{ animationDelay: `${i * 55}ms` }}>
       <div className={`cover cover--${era}`}>
         <div className="cover-top">
           <span className="cover-glyph">♪</span>
@@ -88,8 +106,32 @@ function Row({ title, sub, items, ...rest }: { title: string; sub?: string; item
         {sub && <span className="row-sub">{sub}</span>}
       </div>
       <div className="carousel">
-        {items.map((it) => <Card key={it.rec.id} item={it} {...rest} />)}
+        {items.map((it, i) => <Card key={it.rec.id} item={it} i={i} {...rest} />)}
       </div>
+    </section>
+  )
+}
+
+function Hero({ item, session, onRate, myId }: { item: Item; session: Session | null; onRate: (id: string, n: number) => void; myId?: string }) {
+  const { rec, work, composer } = item
+  const s = scores(rec)
+  const era = composer.era ?? 'default'
+  const critic = useCountUp(s.critic)
+  const audience = useCountUp(s.audience)
+  const mine = rec.reviews.find((x) => x.author_id === myId)?.rating ?? 0
+  return (
+    <section className={`hero hero--${era}`}>
+      <div className="hero-main">
+        <div className="hero-eyebrow"><span className="dot" /> #1 Top Rated</div>
+        <h1 className="hero-title">{work.title}</h1>
+        <div className="hero-sub"><strong>{composer.name}</strong> · {performers(rec)}{rec.year_recorded ? ` · ${rec.year_recorded}` : ''}</div>
+        <div className="hero-scores">
+          <div className="hero-score"><span style={{ fontSize: 24 }}>🎼</span><div><div className="big">{s.critic == null ? '—' : `${critic}%`}</div><div className="lab">Critics</div></div></div>
+          <div className="hero-score"><span style={{ fontSize: 24 }}>🎧</span><div><div className="big">{s.audience == null ? '—' : `${audience}%`}</div><div className="lab">Listeners</div></div></div>
+        </div>
+        {session && <div className="card-rate" style={{ color: 'rgba(255,255,255,0.9)' }}>your rating <Stars value={mine} onRate={(n) => onRate(rec.id, n)} /></div>}
+      </div>
+      <div className={`hero-cover cover--${era}`}>♪</div>
     </section>
   )
 }
@@ -206,6 +248,10 @@ export default function App() {
 
       {loading && <p className="notice" style={{ paddingTop: 24 }}>Loading catalog…</p>}
       {error && <p className="err-block" style={{ paddingTop: 24 }}>Error: {error}</p>}
+
+      {!filtered && topRated[0] && (
+        <Hero item={topRated[0]} session={session} onRate={rate} myId={myId} />
+      )}
 
       {filtered ? (
         <Row title={`Results for “${q}”`} sub={`${filtered.length} recording${filtered.length === 1 ? '' : 's'}`} items={filtered} {...shared} />
