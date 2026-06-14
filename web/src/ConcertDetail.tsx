@@ -6,14 +6,19 @@ type PWork = { id: string; title: string; catalog_system: string | null; catalog
 type Program = { position: number; works: PWork }
 type Concert = {
   id: string; title: string; venue: string | null; city: string | null; starts_at: string; ends_at: string; qr_code: string; description: string | null
-  ensembles: { name: string } | null; concert_program: Program[]
+  ensembles: { name: string } | null; concert_program: Program[]; concert_reviews: CReview[]
 }
+type PScore = { live_count: number; live_avg: number | null; heard_count: number }
 type Checkin = { before_start: boolean; pre_done: boolean; post_done: boolean } | null
 type PieceResp = { heard_before: boolean | null; prior_rating: number | null; live_rating: number | null }
+type CReview = { rating: number; body: string | null; created_at: string; profiles: { display_name: string; role: string } | null }
 
 const SELECT = `id, title, venue, city, starts_at, ends_at, qr_code, description,
   ensembles ( name ),
-  concert_program ( position, works ( id, title, catalog_system, catalog_number, composers ( name, era ) ) )`
+  concert_program ( position, works ( id, title, catalog_system, catalog_number, composers ( name, era ) ) ),
+  concert_reviews ( rating, body, created_at, profiles ( display_name, role ) )`
+
+const pct = (a: number | null) => (a == null ? null : Math.round(((a - 1) / 4) * 100))
 
 function Stars({ value, onRate, size = 20 }: { value: number; onRate: (n: number) => void; size?: number }) {
   return (
@@ -34,11 +39,21 @@ export default function ConcertDetail({ id, session, onBack }: { id: string; ses
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState(false)
+  const [score, setScore] = useState<{ ratings: number; avg_rating: number } | null>(null)
+  const [pieceScore, setPieceScore] = useState<Record<string, PScore>>({})
 
   const load = useCallback(async () => {
     const { data, error } = await supabase.from('concerts').select(SELECT).eq('id', id).single()
     if (error) { setErr(error.message); return }
     setC(data as unknown as Concert)
+    const [{ data: cs }, { data: cps }] = await Promise.all([
+      supabase.from('concert_score').select('ratings,avg_rating').eq('concert_id', id).maybeSingle(),
+      supabase.from('concert_piece_score').select('work_id,live_count,live_avg,heard_count').eq('concert_id', id),
+    ])
+    setScore((cs as { ratings: number; avg_rating: number } | null) ?? null)
+    const pm: Record<string, PScore> = {}
+    for (const r of (cps ?? []) as ({ work_id: string } & PScore)[]) pm[r.work_id] = r
+    setPieceScore(pm)
     if (session?.user) {
       const uid = session.user.id
       const [{ data: ck }, { data: pr }, { data: cr }] = await Promise.all([
@@ -117,6 +132,12 @@ export default function ConcertDetail({ id, session, onBack }: { id: string; ses
           <h1 className="detail-title">{c.title}</h1>
           <div className="detail-perf">{c.ensembles?.name ?? ''}</div>
           <div className="detail-meta">{[when, c.venue, c.city].filter(Boolean).join(' · ')}</div>
+          {score && (
+            <div className="detail-scores">
+              <div className="stat"><div className="num">{pct(score.avg_rating)}%</div><div className="lab">🎻 Concert</div></div>
+              <div className="stat"><div className="num">{score.ratings}</div><div className="lab">{score.ratings === 1 ? 'Rating' : 'Ratings'}</div></div>
+            </div>
+          )}
           {checkin && <div className="checked-badge">✓ Checked in{checkin.before_start ? ' before the concert' : ''}</div>}
         </div>
       </section>
@@ -129,6 +150,9 @@ export default function ConcertDetail({ id, session, onBack }: { id: string; ses
               <li key={p.works.id}>
                 <span className="prog-title">{p.works.title}</span>
                 <span className="prog-composer">{p.works.composers?.name}{p.works.catalog_system ? ` · ${p.works.catalog_system} ${p.works.catalog_number}` : ''}</span>
+                {pieceScore[p.works.id]?.live_avg != null && (
+                  <span className="prog-score">{pct(pieceScore[p.works.id].live_avg)}% live · {pieceScore[p.works.id].live_count} rated</span>
+                )}
               </li>
             ))}
           </ol>
@@ -189,6 +213,26 @@ export default function ConcertDetail({ id, session, onBack }: { id: string; ses
               })}
             </div>
             <button className="btn btn--red btn--big" disabled={busy || !overall} onClick={savePost}>{busy ? 'Saving…' : 'Post concert review'}</button>
+          </section>
+        )}
+        {c.concert_reviews.some((r) => r.body && r.body.trim()) && (
+          <section className="panel">
+            <h2 className="panel-title">Concert reviews <span className="count-badge">{c.concert_reviews.filter((r) => r.body && r.body.trim()).length}</span></h2>
+            <div className="review-list">
+              {c.concert_reviews.filter((r) => r.body && r.body.trim()).map((r, i) => (
+                <article className="review" key={i}>
+                  <div className="review-head">
+                    <span className="review-avatar">{(r.profiles?.display_name ?? '?').charAt(0).toUpperCase()}</span>
+                    <div className="review-who">
+                      <div className="review-author">{r.profiles?.display_name ?? 'Anonymous'}{r.profiles?.role === 'critic' && <span className="badge-critic">Critic</span>}</div>
+                      <div className="review-date">{new Date(r.created_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}</div>
+                    </div>
+                    <Stars value={r.rating} onRate={() => {}} size={16} />
+                  </div>
+                  <p className="review-body">{r.body}</p>
+                </article>
+              ))}
+            </div>
           </section>
         )}
         {err && <p className="err-block" style={{ padding: 0 }}>Error: {err}</p>}
