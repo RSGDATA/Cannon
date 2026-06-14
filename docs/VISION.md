@@ -53,14 +53,20 @@ a `concert` is a live event with a program of works. Ratings attach to
 | Auth | **Supabase Auth** (email/password) |
 | Analytics/scores | **SQL views** (e.g. `recording_scores`, `concert_score`, `concert_piece_score`) |
 | Web app | **React + Vite + TypeScript** in `web/` |
+| Web hosting | **Firebase Hosting** — serves the static React build only; the database/auth stay on Supabase (the two are independent and compatible) |
 | Mobile app | **Flutter** — *not built yet* |
 | Admin/seed tooling | **local Node/Python scripts** using the service-role key (`scripts/`) — trusted local tooling, **not** a deployed backend |
 
 **Overriding constraint: ZERO COST.** Everything used is on Supabase's free tier;
 the app runs locally (`cd web && npm run dev`). Don't introduce anything that
 needs a paid plan/billing without explicit owner approval. No Cloud Functions, no
-server — when something must be hidden/aggregated, use **RLS + SQL views**, or a
-**local script** for one-off admin tasks.
+backend server — when something must be hidden/aggregated, use **RLS + SQL views**,
+or a **local script** for one-off admin tasks.
+
+> **Firebase Hosting is in scope** (it's where the web app deploys). That is *only*
+> static file serving for the React build and is **not** a backend — it's fully
+> compatible with the Supabase database. "No Firebase" means no Firestore /
+> Cloud Functions / Firebase as a backend, **not** "no Firebase Hosting."
 
 ---
 
@@ -87,9 +93,10 @@ aggregate concert + per-piece scores, concert reviews).
 
 ## 5. Guardrails for the next agent
 
-- **No Firebase, no backend server, no Cloud Functions.** Use RLS + SQL views, or a
-  local `scripts/` task. (There's an unused Firebase project `cannon-music-prod`
-  from before the pivot — ignore it; it can be deleted in the Firebase console.)
+- **No Firestore, no backend server, no Cloud Functions.** Database + auth = Supabase;
+  use RLS + SQL views, or a local `scripts/` task. **Firebase Hosting IS used** —
+  but only to serve the static web build (project `cannon-music-prod`), which is
+  static hosting, not a backend. Don't delete that project.
 - **Don't introduce paid services** without explicit owner approval (zero-cost).
 - **Clients never write aggregate/score fields** — derived data lives in SQL views
   (owned by `postgres`, so they bypass RLS to aggregate) granted to `anon`/`authenticated`.
@@ -99,7 +106,10 @@ aggregate concert + per-piece scores, concert reviews).
 ---
 
 ## 6. Not done yet / ideas
-- Deploy online (the web app would go to Vercel/Netlify free; Supabase is already hosted).
+- Deploy the web app to **Firebase Hosting** (`cannon-music-prod`):
+  `cd web && npm run build && firebase deploy --only hosting`. Supabase is already
+  hosted. A CI auto-deploy can be re-added later (needs a fresh Firebase CI
+  service-account key, since the old `FIREBASE_SERVICE_ACCOUNT` secret was removed).
 - Real **camera QR scanning** (currently a typed code).
 - **Sign-up** needs "Confirm email" turned off in Supabase Auth settings for instant prototype logins (sign-in with seeded accounts works now).
 - Flutter mobile app. Composer pages. Concerts in the global search bar.
