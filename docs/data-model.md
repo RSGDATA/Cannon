@@ -1,7 +1,9 @@
-# Cannon — Data Model
+# Cannon — Data Model (PostgreSQL / Supabase)
 
 > "Rotten Tomatoes for classical music."
-> Firestore data model design. **Status: draft for review.** No code yet.
+> **Database: PostgreSQL** (relational + analytical), accessed via **Supabase**
+> (client-direct from React + Flutter, Row-Level Security, built-in Auth).
+> See [`VISION.md`](./VISION.md) for the stack decision and rationale.
 
 ---
 
@@ -10,539 +12,378 @@
 You do **not** rate a *Work*. You rate a *Recording* of a Work.
 
 ```
-Composer ── writes ──▶ Work ── is recorded as ──▶ Recording ◀── reviews ── User
- Beethoven           Symphony No. 5         Kleiber / VPO / 1974      ★★★★★
+composers ──< works ──< recordings >──< credits >── artists / ensembles
+                            │
+                            └──< reviews >── profiles (users)
 ```
 
-Everything in this model flows from that one separation. A `Work` is the
-abstract composition (immutable musical fact). A `Recording` is one captured
-performance of it (the thing with an opinion attached). Ratings, reviews, and
-scores live on **Recordings**. Works inherit *aggregate* signal from their
-recordings but are never rated directly.
+A `work` is the abstract composition; a `recording` is one captured performance.
+**Reviews/ratings reference a `recording`, never a `work`.** Works get their
+aggregate signal from their recordings via SQL views (§7).
 
----
+## 2. Why SQL here (and what changes vs the old NoSQL draft)
 
-## 2. Entity map
-
-```
-                       ┌────────────┐
-                       │  composers │
-                       └─────┬──────┘
-                             │ 1‑to‑many
-                       ┌─────▼──────┐
-                       │   works    │
-                       └─────┬──────┘
-                             │ 1‑to‑many
-                       ┌─────▼──────┐        many‑to‑many (credits)
-            ┌──────────│ recordings │────────────┬───────────────┐
-            │          └─────┬──────┘            │               │
-            │                │             ┌─────▼─────┐   ┌──────▼─────┐
-       ┌────▼────┐           │             │  artists  │   │ ensembles  │
-       │ reviews │           │             │(people)   │   │ (groups)   │
-       └────┬────┘           │             └───────────┘   └────────────┘
-            │ written by     │ referenced by
-       ┌────▼────┐      ┌─────▼─────┐
-       │  users  │      │   lists   │
-       └─────────┘      └───────────┘
-            ▲                 ▲
-            └──── comments ───┘   (comments target reviews or lists)
-```
-
-**Collections (all top-level):**
-`users` · `composers` · `works` · `recordings` · `artists` · `ensembles` ·
-`reviews` · `lists` · `comments`
-
-### A note on "performers / conductors / ensembles"
-
-Your brief listed `performers`, `conductors`, and `ensembles` separately. I'm
-collapsing **performers + conductors into one `artists` collection**, because in
-classical music the same *person* routinely does both — Barenboim conducts *and*
-plays piano; Bernstein composed, conducted, and played. Modeling them as
-separate collections would duplicate that person. Instead an `artist` carries
-`roles: ['conductor', 'pianist']`, and the specific role they played on a given
-recording is captured per-recording in its **credits** (see §5.4).
-
-`ensembles` stays separate because an orchestra / quartet / choir is a *group*,
-not a person, and has different fields (founded year, members, type).
-
----
+This data is **relational and analytical**, not high-scale transactional. Postgres
+gives us:
+- **Real joins + foreign keys** → no more copying display fields onto child rows.
+  The denormalization the Firestore draft needed is **gone**.
+- **Analytical SQL** → ratings, critic/audience splits, and Bayesian rankings are
+  **views** (§7), not a hand-rolled aggregation script.
+- **Migrations** → extend the model over time with `ALTER TABLE` / Supabase
+  migration files, not ad-hoc field sprawl.
 
 ## 3. Conventions
 
-- **IDs:** human-readable slugs where the entity is canonical and shared
-  (`composers/beethoven-ludwig-van`, `works/beethoven-symphony-5`), random
-  auto-IDs for user-generated content (`reviews`, `comments`, `lists`).
-- **Timestamps:** `createdAt`, `updatedAt` as Firestore `Timestamp`. Set via
-  server timestamp.
-- **Denormalization:** child docs cache the *display* fields of their parents
-  (name, title, cover) so a screen renders from one query, not N. The source of
-  truth is the parent; the maintenance script (§6.3) fans out updates when a parent's display
-  field changes (rare). See §7.
-- **Soft delete:** user content (`reviews`, `comments`, `lists`) uses a
-  `deleted: boolean` + `deletedAt` rather than hard delete, so threads and
-  aggregates stay consistent. Catalog entities are admin-only and hard-deleted.
-- **TS interfaces below** live in `shared/` and are imported by the React client
-  and the maintenance script (and mirrored as Dart models in Flutter). There is
-  no Functions backend to import them.
+- **Primary keys:** `uuid` default `gen_random_uuid()` for user content; for shared
+  catalog entities we also keep a unique human-readable `slug` for URLs.
+- **Timestamps:** `created_at timestamptz default now()`, `updated_at` maintained
+  by a trigger (`moddatetime`, a Supabase-provided extension).
+- **Enums:** Postgres `ENUM` types for small, stable sets (era, form, …). For sets
+  likely to grow, a lookup table is the more extensible choice — noted inline.
+- **No denormalized counts.** `review_count`, `recording_count`, average rating,
+  etc. are **derived in views** (§7), not stored. (Add trigger-maintained cache
+  columns later only if a hot query needs it.)
+- **Auth:** Supabase manages `auth.users`. Our app data hangs off a `profiles`
+  table whose `id` = `auth.users.id`.
+- **Soft delete:** `deleted boolean default false` on user content (`reviews`,
+  `comments`, `lists`) so threads/aggregates stay consistent.
 
----
-
-## 4. Catalog collections (admin / curated)
-
-These are the "facts." Written by moderators/admins or an import pipeline, not
-by end users. Read by everyone.
-
-### 4.1 `composers/{slug}`
-
-```ts
-interface Composer {
-  id: string;                 // "beethoven-ludwig-van"
-  name: string;               // "Ludwig van Beethoven"
-  sortName: string;           // "Beethoven, Ludwig van"
-  slug: string;
-  era: Era;                   // 'baroque' | 'classical' | 'romantic' | 'modern' | 'contemporary'
-  nationality?: string;       // ISO country or free text
-  birthYear?: number;
-  deathYear?: number | null;
-  portraitUrl?: string;       // Firebase Storage
-  bio?: string;               // markdown
-  // denormalized aggregates (maintained by the maintenance script)
-  workCount: number;
-  recordingCount: number;
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
-}
-```
-
-### 4.2 `works/{slug}`
-
-The abstract composition.
-
-```ts
-interface Work {
-  id: string;                 // "beethoven-symphony-5"
-  composerId: string;         // → composers
-  composerName: string;       // denormalized for display
-  title: string;              // "Symphony No. 5"
-  sortTitle: string;          // "Symphony No. 05 in C minor"
-  slug: string;
-  nicknames?: string[];       // ["Fate", "Schicksal"]
-  form: WorkForm;             // 'symphony' | 'concerto' | 'sonata' | 'opera' | 'quartet' | 'lied' | ...
-  key?: string;               // "C minor"
-  catalog?: {                 // opus / catalogue number
-    system: string;           // "Op." | "BWV" | "K." | "D." | "Hob."
-    number: string;           // "67"
-  };
-  yearComposed?: number;
-  instrumentation?: string[]; // ["orchestra"] or ["piano"], ["violin","piano"]
-  movements?: { no: number; title: string; tempo?: string }[];
-  // aggregates rolled up from recordings (maintained by the maintenance script)
-  recordingCount: number;
-  topRecordingId?: string;    // highest-scored recording, for "best of" links
-  avgRating?: number;         // mean across all recordings' reviews (informational)
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
-}
-```
-
-> **Why `sortTitle` separate:** "Symphony No. 5" vs "No. 10" sort wrong as
-> strings. Zero-pad in `sortTitle` for correct ordering in catalog views.
-
-### 4.3 `artists/{slug}` (people: conductors, soloists, singers)
-
-```ts
-interface Artist {
-  id: string;                 // "kleiber-carlos"
-  name: string;               // "Carlos Kleiber"
-  sortName: string;           // "Kleiber, Carlos"
-  slug: string;
-  roles: ArtistRole[];        // ['conductor'] | ['pianist','conductor'] | ['soprano']
-  instruments?: string[];     // ['piano'] for soloists
-  nationality?: string;
-  birthYear?: number;
-  deathYear?: number | null;
-  photoUrl?: string;
-  bio?: string;
-  recordingCount: number;     // denormalized
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
-}
-```
-
-### 4.4 `ensembles/{slug}` (groups: orchestras, quartets, choirs)
-
-```ts
-interface Ensemble {
-  id: string;                 // "vienna-philharmonic"
-  name: string;               // "Vienna Philharmonic"
-  slug: string;
-  type: EnsembleType;         // 'orchestra' | 'quartet' | 'choir' | 'chamber' | 'opera-company'
-  foundedYear?: number;
-  nationality?: string;
-  logoUrl?: string;
-  recordingCount: number;
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
-}
-```
-
-### 4.5 `recordings/{slug}` — **the rateable object**
-
-```ts
-interface Recording {
-  id: string;                 // "beethoven-symphony-5-kleiber-vpo-1974"
-  workId: string;             // → works
-  slug: string;
-
-  // --- denormalized display snapshot (so a card renders from this doc alone) ---
-  workTitle: string;          // "Symphony No. 5 in C minor"
-  composerId: string;
-  composerName: string;       // "Ludwig van Beethoven"
-  primaryArtistName?: string; // "Carlos Kleiber" (conductor or lead soloist)
-  ensembleName?: string;      // "Vienna Philharmonic"
-  coverUrl?: string;          // album art (Storage)
-
-  // --- the performance facts ---
-  credits: Credit[];          // structured roster (see Credit)
-  artistIds: string[];        // flat list for array-contains queries → "recordings by X"
-  ensembleIds: string[];      // flat list, same purpose
-  yearRecorded?: number;
-  recordingType: 'studio' | 'live';
-  venue?: string;
-  label?: string;             // "Deutsche Grammophon"
-  labelCatalogNo?: string;    // "DG 447 400-2"
-  durationSec?: number;
-  streaming?: {               // deep links
-    spotify?: string;
-    appleMusic?: string;
-    youtube?: string;
-  };
-
-  // --- aggregates (maintained ONLY by the Admin-SDK maintenance script; clients never write) ---
-  stats: RecordingStats;
-
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
-}
-
-interface Credit {
-  artistId?: string;          // → artists (xor ensembleId)
-  ensembleId?: string;        // → ensembles
-  name: string;               // denormalized display name
-  role: string;               // "conductor" | "piano" | "violin" | "soprano" | "orchestra"
-  isPrimary?: boolean;        // drives primaryArtistName / sort
-}
-
-interface RecordingStats {
-  ratingCount: number;        // total reviews with a rating
-  ratingSum: number;          // Σ ratings — enables increment-based avg
-  avgRating: number;          // ratingSum / ratingCount (denormalized)
-  histogram: Record<1|2|3|4|5, number>; // star distribution
-  // dual scores, Rotten-Tomatoes style:
-  criticCount: number;
-  criticScore?: number;       // 0–100, from users with role 'critic'
-  audienceScore?: number;     // 0–100, from everyone else
-  bayesScore: number;         // ranking score (see §6.2) — sort key for "best of"
-  lastReviewAt?: Timestamp;
-}
-```
-
-> **`artistIds` / `ensembleIds`:** Firestore can't query inside the rich
-> `credits[]` objects. The flat ID arrays exist purely so
-> `where('artistIds','array-contains','kleiber-carlos')` powers an artist's
-> "Recordings" page. The maintenance script keeps them in sync with `credits`.
-
----
-
-## 5. User-generated collections
-
-### 5.1 `users/{uid}` (doc ID = Firebase Auth uid)
-
-```ts
-interface User {
-  uid: string;
-  handle: string;             // "@quietcadenza", unique — enforce via /handles index doc
-  displayName: string;
-  photoURL?: string;
-  bio?: string;
-  role: 'user' | 'critic' | 'moderator' | 'admin';
-  // 'critic' = verified, feeds criticScore; everyone else feeds audienceScore
-  reviewCount: number;
-  listCount: number;
-  followerCount: number;
-  followingCount: number;
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
-}
-```
-
-Private/auth-only data (email, settings, blocked users) goes in a subcollection
-`users/{uid}/private/profile` locked to the owner — never on the public doc.
-
-### 5.2 `reviews/{recordingId}_{uid}` — **deterministic ID = no duplicate reviews**
-
-A "rating" and a "review" are the **same object**: a review is a rating with an
-optional `body`. Rating-only = `body` is empty. This avoids two parallel
-collections that must agree.
-
-The **doc ID is `{recordingId}_{uid}`**, which structurally guarantees one
-review per user per recording — the "prevent duplicate reviews" requirement is
-solved at the data layer for free; no function needed to police it.
-
-```ts
-interface Review {
-  id: string;                 // "{recordingId}_{uid}"
-  recordingId: string;        // → recordings
-  authorId: string;           // → users (uid)
-
-  rating: 1 | 2 | 3 | 4 | 5;  // required (half-stars? use 1–10 instead — see §9)
-  body?: string;              // markdown; absent = rating-only
-  containsSpoiler?: boolean;
-
-  // denormalized snapshots → renders a feed item with no extra reads
-  recordingSnapshot: {
-    workTitle: string;
-    composerName: string;
-    primaryArtistName?: string;
-    coverUrl?: string;
-  };
-  authorSnapshot: {
-    handle: string;
-    displayName: string;
-    photoURL?: string;
-    isCritic: boolean;        // bucket for critic vs audience score
-  };
-
-  likeCount: number;
-  commentCount: number;
-  deleted: boolean;
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
-}
-```
-
-### 5.3 `lists/{listId}` (auto-ID)
-
-User-curated rankings, e.g. "The 10 Beethoven 5ths worth owning."
-
-```ts
-interface List {
-  id: string;
-  ownerId: string;
-  title: string;
-  description?: string;       // markdown
-  visibility: 'public' | 'unlisted' | 'private';
-  items: ListItem[];          // ordered; fine up to ~hundreds. Subcollection if huge.
-  itemCount: number;
-  likeCount: number;
-  commentCount: number;
-  coverUrl?: string;
-  deleted: boolean;
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
-}
-
-interface ListItem {
-  refType: 'recording' | 'work';
-  refId: string;
-  note?: string;              // why it's on the list
-  // denormalized so the list renders standalone:
-  title: string;
-  subtitle?: string;          // composer / performer line
-  coverUrl?: string;
-}
-```
-
-### 5.4 `comments/{commentId}` (auto-ID)
-
-Threaded discussion on a review or a list.
-
-```ts
-interface Comment {
-  id: string;
-  targetType: 'review' | 'list';
-  targetId: string;
-  authorId: string;
-  authorSnapshot: { handle: string; displayName: string; photoURL?: string };
-  body: string;
-  parentId?: string;          // null = top-level; else reply → one-level threading
-  likeCount: number;
-  deleted: boolean;
-  createdAt: Timestamp;
-  updatedAt: Timestamp;
-}
+```sql
+-- enum types
+create type era            as enum ('baroque','classical','romantic','modern','contemporary');
+create type work_form      as enum ('symphony','concerto','sonata','quartet','opera','lied','suite','other');
+create type ensemble_type  as enum ('orchestra','quartet','choir','chamber','opera_company','other');
+create type recording_type as enum ('studio','live');
+create type user_role      as enum ('user','critic','moderator','admin');
+create type list_visibility as enum ('public','unlisted','private');
 ```
 
 ---
 
-## 6. Ratings & scoring — the heart of the app
+## 4. Catalog tables (curated; admin/moderator-written, world-readable)
 
-> **PROTOTYPE = ZERO COST, NO CLOUD FUNCTIONS YET.** The prototype runs on the
-> free tier / local emulators — no paid Blaze plan (see [`VISION.md`](./VISION.md)
-> §3). Aggregation here uses Firestore aggregation queries (live, on read) + an
-> optional local Admin-SDK script for sortable fields. **Cloud Functions
-> (TypeScript) are deferred to a later phase** — they're in the owner's original
-> stack, but they require the paid Blaze plan, so they wait until the owner
-> chooses to incur cost.
+```sql
+create table composers (
+  id           uuid primary key default gen_random_uuid(),
+  slug         text unique not null,
+  name         text not null,                 -- "Ludwig van Beethoven"
+  sort_name    text not null,                 -- "Beethoven, Ludwig van"
+  era          era,
+  nationality  text,
+  birth_year   int,
+  death_year   int,
+  portrait_url text,
+  bio          text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
 
-### 6.1 Display scores: Firestore aggregation queries (live, on read)
+create table works (
+  id            uuid primary key default gen_random_uuid(),
+  slug          text unique not null,
+  composer_id   uuid not null references composers(id) on delete restrict,
+  title         text not null,                -- "Symphony No. 5"
+  sort_title    text not null,                -- "Symphony No. 05 in C minor"
+  nicknames     text[] default '{}',
+  form          work_form,
+  key           text,                         -- "C minor"
+  catalog_system text,                        -- "Op." | "BWV" | "K." | "D."
+  catalog_number text,                        -- "67"
+  year_composed int,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+create index on works (composer_id);
 
-A recording's **average rating and review count are NOT stored** as a
-client-writable field. They are computed **on read** with Firestore
-**aggregation queries** over the recording's reviews:
+-- movements as a child table (relational, queryable, vs a jsonb blob)
+create table work_movements (
+  id        uuid primary key default gen_random_uuid(),
+  work_id   uuid not null references works(id) on delete cascade,
+  position  int  not null,                    -- 1,2,3...
+  title     text not null,
+  tempo     text,
+  unique (work_id, position)
+);
 
-```ts
-// average + count for a recording, server-computed from real review docs
-const q = query(collection(db, 'reviews'),
-                where('recordingId', '==', recordingId),
-                where('deleted', '==', false));
-const agg = await getAggregateFromServer(q, {
-  count: count(),
-  avg: average('rating'),
-});
+create table artists (                        -- people: conductors, soloists, singers
+  id          uuid primary key default gen_random_uuid(),
+  slug        text unique not null,
+  name        text not null,                  -- "Carlos Kleiber"
+  sort_name   text not null,
+  roles       text[] default '{}',            -- ['conductor'] | ['pianist','conductor']
+  instruments text[] default '{}',
+  nationality text,
+  birth_year  int,
+  death_year  int,
+  photo_url   text,
+  bio         text,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+create table ensembles (                      -- groups: orchestras, quartets, choirs
+  id           uuid primary key default gen_random_uuid(),
+  slug         text unique not null,
+  name         text not null,                 -- "Vienna Philharmonic"
+  type         ensemble_type,
+  founded_year int,
+  nationality  text,
+  logo_url     text,
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
 ```
 
-Because the aggregation runs server-side over the actual review documents, a
-client **cannot fake** a recording's score — there is no stored number to tamper
-with. The **critic vs audience** split is the same query with an added
-`where('authorSnapshot.isCritic', '==', true / false)`.
+> **`artists` unifies performers + conductors** (one person, e.g. Barenboim,
+> both conducts and plays). `ensembles` is separate because a group ≠ a person.
+> The *role on a given recording* lives in `credits` (§5).
 
-Both scores are expressed 0–100 for display: `score = (avg − 1) / 4 * 100`
-(for a 1–5 scale; adjust if the scale changes — see §9).
+### 4.1 `recordings` — the rateable object
 
-### 6.2 No duplicate reviews, no client-written aggregates
-
-- **Duplicate prevention** is structural: review doc ID is `{recordingId}_{uid}`,
-  so a user can only ever have one review per recording. No server logic needed.
-- **Security rules forbid clients from writing any aggregate/score field.**
-  Clients write only their own review (`rating`, `body`, a few flags). See §8.
-
-### 6.3 Ranking score (`bayesScore`): a local maintenance script
-
-Aggregation queries are perfect for *displaying one recording*, but you can't
-efficiently **sort all recordings of a Work by a computed average** that lives
-only at read time. Sorting needs a **stored, indexable** number.
-
-A naive average also lets a recording with one 5★ review outrank a classic with
-400 reviews at 4.7. So the sort key is a **Bayesian (weighted) average**:
-
-```
-bayesScore = (v / (v + m)) * R  +  (m / (v + m)) * C
-
-  v = this recording's ratingCount   (from an aggregation query)
-  R = this recording's avgRating      (from an aggregation query)
-  m = minimum reviews for confidence (tunable, e.g. 10)
-  C = global mean rating across all recordings
+```sql
+create table recordings (
+  id              uuid primary key default gen_random_uuid(),
+  slug            text unique not null,
+  work_id         uuid not null references works(id) on delete restrict,
+  year_recorded   int,
+  recording_type  recording_type not null default 'studio',
+  venue           text,
+  label           text,                        -- "Deutsche Grammophon"
+  label_catalog_no text,
+  duration_sec    int,
+  cover_url       text,
+  spotify_url     text,
+  apple_music_url text,
+  youtube_url     text,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now()
+);
+create index on recordings (work_id);
 ```
 
-**How it gets written (no Cloud Function):** a **local Node maintenance script**
-using the Firebase **Admin SDK**, run by the owner on a schedule (manually, or
-the owner's own cron). It:
+No `work_title` / `composer_name` columns — we **join** to `works`/`composers`.
 
-1. computes `C` (global mean) across all reviews,
-2. for each recording, runs the count/avg aggregation, computes `bayesScore`,
-   and writes `stats` + `bayesScore` to the recording doc (Admin SDK bypasses
-   security rules — that's why only this trusted script may write these fields),
-3. rolls up `works` (`recordingCount`, `avgRating`, `topRecordingId` = max
-   `bayesScore`) and `composers` counts.
+### 4.2 `credits` — recording ↔ artist/ensemble (many-to-many, with role)
 
-This is the same category of tool as the `firebase` CLI — trusted local tooling,
-**not** deployed app backend. Lives at e.g. `scripts/recompute-scores.ts`.
+```sql
+create table credits (
+  id           uuid primary key default gen_random_uuid(),
+  recording_id uuid not null references recordings(id) on delete cascade,
+  artist_id    uuid references artists(id)   on delete cascade,
+  ensemble_id  uuid references ensembles(id) on delete cascade,
+  role         text not null,                 -- 'conductor' | 'piano' | 'violin' | 'orchestra'
+  is_primary   boolean not null default false,
+  -- exactly one of artist_id / ensemble_id must be set:
+  constraint credit_one_target check (
+    (artist_id is not null) <> (ensemble_id is not null)
+  )
+);
+create index on credits (recording_id);
+create index on credits (artist_id);
+create index on credits (ensemble_id);
+```
 
-**Tradeoff:** ranking/leaderboard values are **eventually consistent** — they
-update when the script runs (e.g. nightly), not the instant a review lands. Live
-per-recording display scores (§6.1) are always current; only the *sortable* roll-ups lag.
-
-### 6.4 `RecordingStats` is script-owned, read-only to clients
-
-The `stats` block on a recording (and `works` roll-ups) is written **only** by
-the maintenance script. Clients read it for sorting/leaderboards but can never
-write it (enforced in rules). For an always-fresh single-recording score, clients
-use the §6.1 aggregation query rather than trusting stored `stats`.
+"Recordings by Carlos Kleiber" is now a join, not a flat ID array:
+`select r.* from recordings r join credits c on c.recording_id = r.id where c.artist_id = $1;`
 
 ---
 
-## 7. Denormalization & fan-out
+## 5. User-generated tables
 
-Cached display fields keep reads cheap but must be refreshed when the source
-changes. These are *rare* (an admin fixing a composer's name), so fan-out cost
-is acceptable.
+```sql
+-- profiles: 1:1 with Supabase auth.users
+create table profiles (
+  id           uuid primary key references auth.users(id) on delete cascade,
+  handle       text unique not null,          -- "quietcadenza"
+  display_name text not null,
+  photo_url    text,
+  bio          text,
+  role         user_role not null default 'user',  -- 'critic' feeds critic score
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()
+);
 
-| When this changes | Fan out to |
-|-------------------|------------|
-| `composer.name` | its `works.composerName`, `recordings.composerName` |
-| `work.title` | its `recordings.workTitle`, any `reviews.recordingSnapshot` |
-| `user.displayName/photoURL` | that user's `reviews.authorSnapshot`, `comments.authorSnapshot` |
-| `recording` cover/primary artist | that recording's `reviews.recordingSnapshot` |
+create table reviews (
+  id              uuid primary key default gen_random_uuid(),
+  recording_id    uuid not null references recordings(id) on delete cascade,
+  author_id       uuid not null references profiles(id)   on delete cascade,
+  rating          smallint not null check (rating between 1 and 5),  -- scale: open decision §8
+  body            text,                        -- null/empty = rating-only
+  contains_spoiler boolean not null default false,
+  deleted         boolean not null default false,
+  created_at      timestamptz not null default now(),
+  updated_at      timestamptz not null default now(),
+  -- one review per user per recording, enforced by the DB:
+  unique (recording_id, author_id)
+);
+create index on reviews (recording_id);
+create index on reviews (author_id);
+```
 
-Handled by the **local Admin-SDK maintenance script** (same one as §6.3), not a
-Cloud Function. Because these source edits are *rare* (an admin fixing a
-composer's name), refreshing the denormalized copies on the next script run — or
-a targeted one-off script invocation — is fine. For high-cardinality fan-out (a
-prolific user's thousands of reviews) the script batches writes in chunks of 500.
-Brief staleness of a cached display name between edit and script run is acceptable.
+> The `UNIQUE (recording_id, author_id)` constraint is the native, bullet-proof
+> version of "no duplicate reviews" — no app logic needed.
+
+```sql
+create table lists (
+  id          uuid primary key default gen_random_uuid(),
+  owner_id    uuid not null references profiles(id) on delete cascade,
+  title       text not null,
+  description text,
+  visibility  list_visibility not null default 'public',
+  cover_url   text,
+  deleted     boolean not null default false,
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+create table list_items (
+  id           uuid primary key default gen_random_uuid(),
+  list_id      uuid not null references lists(id) on delete cascade,
+  position     int  not null,
+  recording_id uuid references recordings(id) on delete cascade,
+  work_id      uuid references works(id)      on delete cascade,
+  note         text,
+  constraint list_item_one_ref check (
+    (recording_id is not null) <> (work_id is not null)
+  ),
+  unique (list_id, position)
+);
+
+create table comments (
+  id         uuid primary key default gen_random_uuid(),
+  author_id  uuid not null references profiles(id) on delete cascade,
+  -- polymorphic target: exactly one of review_id / list_id
+  review_id  uuid references reviews(id) on delete cascade,
+  list_id    uuid references lists(id)   on delete cascade,
+  parent_id  uuid references comments(id) on delete cascade,  -- threading
+  body       text not null,
+  deleted    boolean not null default false,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint comment_one_target check (
+    (review_id is not null) <> (list_id is not null)
+  )
+);
+
+-- generic likes (reviews / comments / lists) via separate small tables keeps FKs clean:
+create table review_likes  (review_id  uuid references reviews(id)  on delete cascade,
+                            user_id uuid references profiles(id) on delete cascade,
+                            primary key (review_id, user_id));
+create table list_likes    (list_id    uuid references lists(id)    on delete cascade,
+                            user_id uuid references profiles(id) on delete cascade,
+                            primary key (list_id, user_id));
+```
 
 ---
 
-## 8. Security rules (sketch)
+## 6. Scoring & analytics — this is where SQL shines
 
-```
-users/{uid}            read: all; write: request.auth.uid == uid (limited fields)
-users/{uid}/private/*  read,write: owner only
-composers, works,
-artists, ensembles,
-recordings             read: all; write: role in {moderator, admin};
-                       recordings.stats / bayesScore: NEVER from client
-                       (only the Admin-SDK maintenance script writes these —
-                        Admin SDK bypasses rules)
-reviews/{rid_uid}      read: all (non-deleted);
-                       create/update: auth.uid == uid AND id == rid+'_'+uid
-                                      AND request only touches rating/body/flags
-                                      (no stats/snapshot/count tampering)
-                       delete: owner or moderator (soft delete)
-lists                  read: visibility=='public' OR owner; write: owner
-comments               read: all (non-deleted); create: any auth user;
-                       update/delete: author or moderator
+No aggregation script, no maintained `stats` columns. Scores are **views** over
+the real review rows: always correct, always live, impossible for clients to fake
+(they can't write a view).
+
+```sql
+-- 6.1 per-recording rating summary (live)
+create view recording_ratings as
+select
+  r.id as recording_id,
+  count(*)                                              as rating_count,
+  round(avg(rv.rating)::numeric, 2)                     as avg_rating,
+  count(*) filter (where p.role = 'critic')             as critic_count,
+  round(avg(rv.rating) filter (where p.role = 'critic')::numeric, 2)  as critic_avg,
+  round(avg(rv.rating) filter (where p.role <> 'critic')::numeric, 2) as audience_avg
+from recordings r
+left join reviews  rv on rv.recording_id = r.id and rv.deleted = false
+left join profiles p  on p.id = rv.author_id
+group by r.id;
 ```
 
-Clients write only `rating` + `body` (+ a few flags) on reviews. All derived
-data (`stats`, `bayesScore`, snapshots, counts) is **script-owned** and
-rule-blocked from clients. There is **no Cloud Function** — the trust boundary is
-held by (a) security rules that reject client writes to derived fields, (b)
-live aggregation queries computed server-side from real review docs (§6.1), and
-(c) the trusted local Admin-SDK script for sortable roll-ups (§6.3).
+```sql
+-- 6.2 Bayesian ranking — so 1×5★ doesn't outrank a classic with 400 reviews.
+--     bayes = (v/(v+m))*R + (m/(v+m))*C   with global mean C and prior weight m.
+create view recording_scores as
+with global as (
+  select avg(rating)::numeric as c, 10::numeric as m   -- m = prior weight (tunable)
+  from reviews where deleted = false
+)
+select
+  rr.recording_id,
+  rr.rating_count,
+  rr.avg_rating,
+  round(
+    (rr.rating_count / (rr.rating_count + g.m)) * coalesce(rr.avg_rating, g.c)
+    + (g.m / (rr.rating_count + g.m)) * g.c
+  , 3) as bayes_score
+from recording_ratings rr cross join global g;
+```
+
+"Best recordings of a work" is then just:
+`select * from recording_scores s join recordings r on r.id = s.recording_id
+   where r.work_id = $1 order by s.bayes_score desc;`
+
+```sql
+-- 6.3 work-level roll-up (recording count + best recording)
+create view work_stats as
+select w.id as work_id,
+       count(r.id) as recording_count,
+       (select s.recording_id from recording_scores s
+          join recordings r2 on r2.id = s.recording_id
+         where r2.work_id = w.id order by s.bayes_score desc limit 1) as top_recording_id
+from works w left join recordings r on r.work_id = w.id
+group by w.id;
+```
+
+> If any of these get hot at scale, convert to a **materialized view** refreshed
+> on a schedule (Supabase `pg_cron`) — a one-line change, still no app backend.
 
 ---
 
-## 9. Open decisions (need your call before scaffolding)
+## 7. Row-Level Security (RLS) — Supabase's "security rules"
 
-1. **Rating scale.** 5 stars (whole) is simplest. But classical reviewers love
-   nuance — consider **1–10** (half-star feel) or even 0–100. Changes the
-   `rating` type everywhere. *My lean: 1–10, displayed as 5 stars w/ halves.*
-2. **Critic verification.** How does someone become `role: 'critic'`? Manual
-   admin grant to start? Affects whether `criticScore` is meaningful at launch.
-3. **Movements / timings per recording.** Do you want per-movement durations and
-   eventually per-movement ratings, or is the recording the smallest unit? (I'd
-   keep recording as the unit for v1; movements optional metadata.)
-4. **Following / activity feed.** Implied by `followerCount`. In scope for the
-   data model now, or add the `follows` collection + feed fan-out later?
-5. **Works with multiple composers** (collaborations, completions — Mozart
-   Requiem). Rare; model `composerId` as primary + optional `additionalComposerIds[]`?
+RLS is enforced *in Postgres*, so client-direct queries are safe.
+
+```sql
+alter table reviews enable row level security;
+
+-- anyone can read non-deleted reviews
+create policy reviews_read on reviews for select
+  using (deleted = false);
+
+-- a user may write only their own review
+create policy reviews_write on reviews for insert
+  with check (auth.uid() = author_id);
+create policy reviews_update on reviews for update
+  using (auth.uid() = author_id);
+```
+
+Sketch for the rest:
+- `profiles`: read all; update only `auth.uid() = id`.
+- catalog tables (`composers`, `works`, `recordings`, …): read all; write only if
+  the caller's `profiles.role in ('moderator','admin')`.
+- `lists`: read if `visibility = 'public'` or `owner_id = auth.uid()`; write owner.
+- `comments`: read non-deleted; insert any authed user; update/delete author or moderator.
+- Views inherit the RLS of their underlying tables — clients see only permitted rows.
 
 ---
 
-## 10. What this sets up for later
+## 8. Open decisions (need your call)
 
-- **Algolia/Meilisearch:** index `works`, `recordings`, `composers`, `artists`,
-  `ensembles`. Searchable fields are already denormalized onto each doc
-  (composer + work + performer names all live on the recording), so the search
-  record is a near-direct projection. The **maintenance script** pushes records
-  to the search index (no Cloud Function); acceptable since the catalog changes
-  slowly.
-- **Maintenance script** (`scripts/`, Admin SDK, run by owner — NOT a deployed
-  Function) owns all derived data: recompute `bayesScore` + roll-ups (§6.3),
-  denormalization fan-out (§7), and search-index sync. This is the only
-  "backend" Cannon has, and it runs on a trusted machine, not in the cloud.
-- **`shared/` types:** every interface above becomes a TS type consumed by the
-  React app + the maintenance script; mirrored as Dart models in Flutter.
-```
+1. **Rating scale** — `check (rating between 1 and 5)` now. Switch to **1–10** for
+   half-star nuance? One-line CHECK change; do it before data exists.
+2. **Critic verification** — how does `profiles.role` become `'critic'`? Manual
+   admin grant to start?
+3. **Per-movement ratings** — keep recording as the smallest rateable unit (v1), or
+   later allow rating individual `work_movements`?
+4. **Following / activity feed** — add a `follows (follower_id, followee_id)` table +
+   a feed query now, or later?
+5. **Multi-composer works** (Mozart Requiem completions) — add a
+   `work_composers` join table instead of a single `works.composer_id`?
+
+---
+
+## 9. Migrations & extensibility
+
+Schema lives in **Supabase migration files** (`supabase/migrations/*.sql`), version
+controlled in this repo. Extending the model = a new migration (`alter table …`),
+applied locally then pushed. This is the "add on to the data model" path you wanted —
+explicit, reviewable, and reversible, unlike schemaless drift.
