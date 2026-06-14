@@ -5,6 +5,7 @@ import RecordingDetail from './RecordingDetail'
 import Concerts from './Concerts'
 import ConcertDetail from './ConcertDetail'
 import AuthModal from './AuthModal'
+import { freshPct } from './lib/score'
 
 type Review = { rating: number; author_id: string; profiles: { role: string } | null }
 type Credit = { artists: { name: string } | null; ensembles: { name: string } | null }
@@ -24,13 +25,12 @@ const CATALOG_SELECT = `id, name, era, birth_year, death_year,
 const performers = (r: Recording) =>
   r.credits.map((c) => c.artists?.name ?? c.ensembles?.name).filter(Boolean).join(' · ')
 const surname = (name: string) => name.split(' ').pop() ?? name
-const pctOf = (arr: number[]) => (arr.length ? Math.round(((arr.reduce((a, b) => a + b, 0) / arr.length - 1) / 4) * 100) : null)
-
 function scores(r: Recording) {
   const critic = r.reviews.filter((x) => x.profiles?.role === 'critic').map((x) => x.rating)
   const audience = r.reviews.filter((x) => x.profiles?.role !== 'critic').map((x) => x.rating)
+  // 'overall' is the average, used only for ranking; the displayed % is freshness.
   const overall = r.reviews.length ? r.reviews.reduce((a, b) => a + b.rating, 0) / r.reviews.length : -1
-  return { critic: pctOf(critic), audience: pctOf(audience), overall }
+  return { critic: freshPct(critic), audience: freshPct(audience), overall }
 }
 
 function useCountUp(target: number | null, ms = 900) {

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from './lib/supabase'
+import { freshPct } from './lib/score'
 
 type RevAuthor = { handle: string; display_name: string; role: string } | null
 type DetailReview = { id: string; rating: number; body: string | null; created_at: string; author_id: string; profiles: RevAuthor }
@@ -18,7 +19,7 @@ const DETAIL_SELECT = `id, year_recorded, label, venue, recording_type,
   credits ( role, is_primary, artists ( name ), ensembles ( name ) ),
   reviews ( id, rating, body, created_at, author_id, profiles!reviews_author_id_fkey ( handle, display_name, role ) )`
 
-const pct = (arr: number[]) => (arr.length ? Math.round(((arr.reduce((a, b) => a + b, 0) / arr.length - 1) / 4) * 100) : null)
+const pct = freshPct // Rotten-Tomatoes-style: % of reviews that are good (see lib/score.ts)
 
 function Stars({ value, onRate, readOnly }: { value: number; onRate?: (n: number) => void; readOnly?: boolean }) {
   return (

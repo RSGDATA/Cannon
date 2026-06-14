@@ -8,7 +8,7 @@ type Concert = {
   id: string; title: string; venue: string | null; city: string | null; starts_at: string; ends_at: string; qr_code: string; description: string | null
   ensembles: { name: string } | null; concert_program: Program[]; concert_reviews: CReview[]
 }
-type PScore = { live_count: number; live_avg: number | null; heard_count: number }
+type PScore = { live_count: number; live_avg: number | null; live_fresh_pct: number | null; heard_count: number }
 type Checkin = { before_start: boolean; pre_done: boolean; post_done: boolean } | null
 type PieceResp = { heard_before: boolean | null; prior_rating: number | null; live_rating: number | null }
 type CReview = { rating: number; body: string | null; created_at: string; profiles: { display_name: string; role: string } | null }
@@ -17,8 +17,6 @@ const SELECT = `id, title, venue, city, starts_at, ends_at, qr_code, description
   ensembles ( name ),
   concert_program ( position, works ( id, title, catalog_system, catalog_number, composers ( name, era ) ) ),
   concert_reviews ( rating, body, created_at, profiles ( display_name, role ) )`
-
-const pct = (a: number | null) => (a == null ? null : Math.round(((a - 1) / 4) * 100))
 
 function Stars({ value, onRate, size = 20 }: { value: number; onRate: (n: number) => void; size?: number }) {
   return (
@@ -39,7 +37,7 @@ export default function ConcertDetail({ id, session, onBack }: { id: string; ses
   const [err, setErr] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState(false)
-  const [score, setScore] = useState<{ ratings: number; avg_rating: number } | null>(null)
+  const [score, setScore] = useState<{ ratings: number; avg_rating: number; fresh_pct: number } | null>(null)
   const [pieceScore, setPieceScore] = useState<Record<string, PScore>>({})
 
   const load = useCallback(async () => {
@@ -47,10 +45,10 @@ export default function ConcertDetail({ id, session, onBack }: { id: string; ses
     if (error) { setErr(error.message); return }
     setC(data as unknown as Concert)
     const [{ data: cs }, { data: cps }] = await Promise.all([
-      supabase.from('concert_score').select('ratings,avg_rating').eq('concert_id', id).maybeSingle(),
-      supabase.from('concert_piece_score').select('work_id,live_count,live_avg,heard_count').eq('concert_id', id),
+      supabase.from('concert_score').select('ratings,avg_rating,fresh_pct').eq('concert_id', id).maybeSingle(),
+      supabase.from('concert_piece_score').select('work_id,live_count,live_avg,live_fresh_pct,heard_count').eq('concert_id', id),
     ])
-    setScore((cs as { ratings: number; avg_rating: number } | null) ?? null)
+    setScore((cs as { ratings: number; avg_rating: number; fresh_pct: number } | null) ?? null)
     const pm: Record<string, PScore> = {}
     for (const r of (cps ?? []) as ({ work_id: string } & PScore)[]) pm[r.work_id] = r
     setPieceScore(pm)
@@ -134,7 +132,7 @@ export default function ConcertDetail({ id, session, onBack }: { id: string; ses
           <div className="detail-meta">{[when, c.venue, c.city].filter(Boolean).join(' · ')}</div>
           {score && (
             <div className="detail-scores">
-              <div className="stat"><div className="num">{pct(score.avg_rating)}%</div><div className="lab">🎻 Concert</div></div>
+              <div className="stat"><div className="num">{score.fresh_pct}%</div><div className="lab">🎻 Concert</div></div>
               <div className="stat"><div className="num">{score.ratings}</div><div className="lab">{score.ratings === 1 ? 'Rating' : 'Ratings'}</div></div>
             </div>
           )}
@@ -152,8 +150,8 @@ export default function ConcertDetail({ id, session, onBack }: { id: string; ses
                 <li key={p.works.id}>
                   <span className="prog-title">{p.works.title}</span>
                   <span className="prog-composer">{p.works.composers?.name}{p.works.catalog_system ? ` · ${p.works.catalog_system} ${p.works.catalog_number}` : ''}</span>
-                  {ps && ps.live_avg != null && (
-                    <span className="prog-score">{pct(ps.live_avg)}% live · {ps.live_count} rated</span>
+                  {ps && ps.live_fresh_pct != null && (
+                    <span className="prog-score">{ps.live_fresh_pct}% liked · {ps.live_count} rated</span>
                   )}
                 </li>
               )

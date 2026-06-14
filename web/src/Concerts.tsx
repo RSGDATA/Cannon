@@ -7,7 +7,6 @@ type C = { id: string; title: string; venue: string | null; city: string | null;
 const SELECT = `id, title, venue, city, starts_at, ends_at, qr_code, ensembles(name), concert_program(works(title))`
 const phaseOf = (c: C) => { const now = Date.now(), s = new Date(c.starts_at).getTime(), e = new Date(c.ends_at).getTime(); return now > e ? 'past' : now >= s ? 'live' : 'upcoming' }
 const LABEL: Record<string, string> = { past: 'Past', live: 'Now', upcoming: 'Upcoming' }
-const pct = (a: number) => Math.round(((a - 1) / 4) * 100)
 
 export default function Concerts({ session, onOpen }: { session: Session | null; onOpen: (id: string) => void }) {
   const [list, setList] = useState<C[]>([])
@@ -15,16 +14,16 @@ export default function Concerts({ session, onOpen }: { session: Session | null;
   const [code, setCode] = useState('')
   const [codeMsg, setCodeMsg] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
-  const [scores, setScores] = useState<Record<string, { ratings: number; avg_rating: number }>>({})
+  const [scores, setScores] = useState<Record<string, { ratings: number; fresh_pct: number }>>({})
 
   const load = useCallback(async () => {
     const [{ data, error }, { data: sc }] = await Promise.all([
       supabase.from('concerts').select(SELECT).order('starts_at'),
-      supabase.from('concert_score').select('concert_id,ratings,avg_rating'),
+      supabase.from('concert_score').select('concert_id,ratings,fresh_pct'),
     ])
     if (error) setErr(error.message); else setList((data as unknown as C[]) ?? [])
-    const m: Record<string, { ratings: number; avg_rating: number }> = {}
-    for (const r of (sc ?? []) as { concert_id: string; ratings: number; avg_rating: number }[]) m[r.concert_id] = { ratings: r.ratings, avg_rating: r.avg_rating }
+    const m: Record<string, { ratings: number; fresh_pct: number }> = {}
+    for (const r of (sc ?? []) as { concert_id: string; ratings: number; fresh_pct: number }[]) m[r.concert_id] = { ratings: r.ratings, fresh_pct: r.fresh_pct }
     setScores(m)
   }, [])
   useEffect(() => { load() }, [load])
@@ -85,7 +84,7 @@ export default function Concerts({ session, onOpen }: { session: Session | null;
                 <div className="concert-prog">{c.concert_program.map((p) => p.works.title).join('  •  ')}</div>
               </div>
               <div className="concert-cta">
-                {sc && <span className="concert-score" title={`${sc.ratings} ratings`}>{pct(sc.avg_rating)}%</span>}
+                {sc && <span className="concert-score" title={`${sc.ratings} ratings`}>{sc.fresh_pct}%</span>}
                 <span className="cgo">→</span>
               </div>
             </article>
