@@ -4,6 +4,7 @@ import { supabase } from './lib/supabase'
 import RecordingDetail from './RecordingDetail'
 import Concerts from './Concerts'
 import ConcertDetail from './ConcertDetail'
+import AuthModal from './AuthModal'
 
 type Review = { rating: number; author_id: string; profiles: { role: string } | null }
 type Credit = { artists: { name: string } | null; ensembles: { name: string } | null }
@@ -139,11 +140,7 @@ function Hero({ item, session, onRate, onOpen, myId }: { item: Item; session: Se
   )
 }
 
-function NavAuth({ session }: { session: Session | null }) {
-  const [email, setEmail] = useState('alice@example.com')
-  const [password, setPassword] = useState('password123')
-  const [err, setErr] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
+function NavAuth({ session, onOpen }: { session: Session | null; onOpen: (m: 'in' | 'up') => void }) {
   if (session) {
     return (
       <div className="nav-auth">
@@ -152,22 +149,10 @@ function NavAuth({ session }: { session: Session | null }) {
       </div>
     )
   }
-  async function go(kind: 'in' | 'up') {
-    setBusy(true); setErr(null)
-    const { data, error } = await (kind === 'in'
-      ? supabase.auth.signInWithPassword({ email, password })
-      : supabase.auth.signUp({ email, password }))
-    if (error) setErr(error.message)
-    else if (kind === 'up' && !data.session) setErr('Confirm via email or disable email confirmation.')
-    setBusy(false)
-  }
   return (
     <div className="nav-auth">
-      <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="email" />
-      <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="password" type="password" />
-      <button type="button" className="btn btn--red" disabled={busy} onClick={() => go('in')}>Sign in</button>
-      <button type="button" className="btn btn--ghost" disabled={busy} onClick={() => go('up')}>Join</button>
-      {err && <span className="auth-err">{err}</span>}
+      <button type="button" className="btn btn--ghost" onClick={() => onOpen('in')}>Sign in</button>
+      <button type="button" className="btn btn--red" onClick={() => onOpen('up')}>Join</button>
     </div>
   )
 }
@@ -182,6 +167,7 @@ export default function App() {
   const [concertId, setConcertId] = useState<string | null>(null)
   const [tab, setTab] = useState<'home' | 'concerts'>('home')
   const [pending, setPending] = useState<{ id: string; title: string; kind: 'pre' | 'post' } | null>(null)
+  const [authMode, setAuthMode] = useState<'in' | 'up' | null>(null)
 
   const loadCatalog = useCallback(async () => {
     const { data, error } = await supabase.from('composers').select(CATALOG_SELECT).order('sort_name')
@@ -194,12 +180,7 @@ export default function App() {
     supabase.auth.getSession().then(({ data }) => setSession(data.session))
     const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => {
       setSession(s)
-      if (s?.user) {
-        supabase.from('profiles').upsert(
-          { id: s.user.id, handle: s.user.email!.split('@')[0], display_name: s.user.email!.split('@')[0] },
-          { onConflict: 'id', ignoreDuplicates: true },
-        ).then(() => {})
-      }
+      if (s) setAuthMode(null) // profile is created server-side by the signup trigger
     })
     return () => sub.subscription.unsubscribe()
   }, [])
@@ -267,8 +248,10 @@ export default function App() {
           <span className="mag">🔍</span>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search composers, works, performers" />
         </div>
-        <NavAuth session={session} />
+        <NavAuth session={session} onOpen={setAuthMode} />
       </nav>
+
+      {authMode && <AuthModal mode={authMode} onClose={() => setAuthMode(null)} />}
 
       {concertId ? (
         <ConcertDetail id={concertId} session={session} onBack={() => setConcertId(null)} />
