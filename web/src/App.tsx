@@ -26,11 +26,12 @@ const performers = (r: Recording) =>
   r.credits.map((c) => c.artists?.name ?? c.ensembles?.name).filter(Boolean).join(' · ')
 const surname = (name: string) => name.split(' ').pop() ?? name
 function scores(r: Recording) {
+  const all = r.reviews.map((x) => x.rating)
   const critic = r.reviews.filter((x) => x.profiles?.role === 'critic').map((x) => x.rating)
   const audience = r.reviews.filter((x) => x.profiles?.role !== 'critic').map((x) => x.rating)
-  // 'overall' is the average, used only for ranking; the displayed % is freshness.
-  const overall = r.reviews.length ? r.reviews.reduce((a, b) => a + b.rating, 0) / r.reviews.length : -1
-  return { critic: freshPct(critic), audience: freshPct(audience), overall }
+  // 'fresh' (overall % good) is the ranking key; 'avg' only breaks ties between equal freshness.
+  const avg = all.length ? all.reduce((a, b) => a + b, 0) / all.length : -1
+  return { critic: freshPct(critic), audience: freshPct(audience), fresh: freshPct(all), avg }
 }
 
 function useCountUp(target: number | null, ms = 900) {
@@ -230,7 +231,11 @@ export default function App() {
   }, [q, allItems])
 
   const topRated = useMemo(
-    () => [...allItems].filter((i) => i.rec.reviews.length).sort((a, b) => scores(b.rec).overall - scores(a.rec).overall),
+    () => allItems
+      .filter((i) => i.rec.reviews.length)
+      .map((i) => ({ i, s: scores(i.rec) }))
+      .sort((a, b) => (b.s.fresh ?? -1) - (a.s.fresh ?? -1) || b.s.avg - a.s.avg)
+      .map((x) => x.i),
     [allItems],
   )
   const myId = session?.user.id
