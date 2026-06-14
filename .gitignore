@@ -10,6 +10,11 @@ build/
 supabase/.temp/
 supabase/.branches/
 
+# Firebase Hosting (deploy cache / logs)
+.firebase/
+firebase-debug.log
+.firebase.json.bak
+
 # Env / secrets
 .env
 .env.*
