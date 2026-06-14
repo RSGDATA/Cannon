@@ -4,15 +4,11 @@ node_modules/
 
 # Build output
 web/dist/
-functions/lib/
 build/
 
-# Firebase
-.firebase/
-firebase-debug.log
-firestore-debug.log
-ui-debug.log
-*-debug.log
+# Supabase
+supabase/.temp/
+supabase/.branches/
 
 # Env / secrets
 .env
@@ -20,10 +16,7 @@ ui-debug.log
 !.env.example
 *-service-account*.json
 serviceAccount*.json
-gha-creds-*.json
 *-sa.json
-prod-sa.json
-staging-sa.json
 
 # Flutter
 mobile/.dart_tool/

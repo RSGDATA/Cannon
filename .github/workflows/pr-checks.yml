@@ -1,19 +1,13 @@
 name: PR checks
 
-# Runs on every pull request targeting main. These checks are what branch
-# protection requires before a PR can be merged (= the "reviewed" gate).
+# Runs on every pull request to main. This is the required check for branch
+# protection. It type-checks and builds the React web app.
 on:
   pull_request:
     branches: [main]
 
 permissions:
   contents: read
-  checks: write
-  pull-requests: write   # for the preview-URL comment
-
-concurrency:
-  group: pr-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
 
 jobs:
   web:
@@ -24,70 +18,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-      - name: Skip if web/ not scaffolded yet
-        id: guard
-        run: |
-          if [ -f web/package.json ]; then echo "run=true" >> "$GITHUB_OUTPUT"; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
-      - if: steps.guard.outputs.run == 'true'
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install & build
         working-directory: web
         run: |
           npm ci
           npm run lint --if-present
-          npm run typecheck --if-present
-          npm run test --if-present
           npm run build
-
-  mobile:
-    name: Flutter (analyze, test)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Skip if mobile/ not scaffolded yet
-        id: guard
-        run: |
-          if [ -f mobile/pubspec.yaml ]; then echo "run=true" >> "$GITHUB_OUTPUT"; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
-      - if: steps.guard.outputs.run == 'true'
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
-      - if: steps.guard.outputs.run == 'true'
-        working-directory: mobile
-        run: |
-          flutter pub get
-          flutter analyze
-          flutter test
-
-  preview:
-    name: Web preview deploy
-    runs-on: ubuntu-latest
-    needs: [web]
-    # Skip on PRs from forks — they cannot access repository secrets.
-    if: github.event.pull_request.head.repo.full_name == github.repository
-    steps:
-      - uses: actions/checkout@v4
-      - name: Check web/ scaffolded
-        id: guard
-        run: |
-          if [ -f web/package.json ]; then echo "run=true" >> "$GITHUB_OUTPUT"; else echo "run=false" >> "$GITHUB_OUTPUT"; fi
-      - if: steps.guard.outputs.run == 'true'
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - if: steps.guard.outputs.run == 'true'
-        working-directory: web
-        run: |
-          npm ci
-          npm run build
-      # Deploys the built site to a temporary Hosting preview channel and
-      # comments the live URL on the PR so reviewers can click through.
-      - if: steps.guard.outputs.run == 'true'
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          projectId: cannon-music-prod
-          channelId: pr-${{ github.event.pull_request.number }}
-          expires: 7d

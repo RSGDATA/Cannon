@@ -387,3 +387,61 @@ Schema lives in **Supabase migration files** (`supabase/migrations/*.sql`), vers
 controlled in this repo. Extending the model = a new migration (`alter table …`),
 applied locally then pushed. This is the "add on to the data model" path you wanted —
 explicit, reviewable, and reversible, unlike schemaless drift.
+
+---
+
+## 10. Live concerts
+
+A second rating world: real concerts you attend. A QR/code in the program links to
+a `concerts` row; attendees check in and get timed prompts.
+
+```sql
+concerts (id, slug, title, venue, city, starts_at, ends_at,
+          qr_code unique,         -- the code printed in the program
+          ensemble_id → ensembles, description)
+
+concert_program (concert_id → concerts, work_id → works, position)  -- ordered pieces
+
+-- one row per (user, concert), created on QR check-in; flags drive the prompt queue
+concert_checkins (concert_id, user_id → profiles,
+                  checked_in_at, before_start, pre_done, post_done,
+                  unique (concert_id, user_id))
+
+-- per-piece responses: pre-concert (heard_before / prior_rating) + post (live_rating)
+concert_piece_ratings (concert_id, user_id, work_id,
+                       heard_before, prior_rating, live_rating,
+                       unique (concert_id, user_id, work_id))
+
+-- overall concert rating + text
+concert_reviews (concert_id, user_id, rating 1–5, body, unique (concert_id, user_id))
+```
+
+**Prompt phases (computed from `now()` vs `starts_at`/`ends_at`):**
+- before `ends_at` → **pre** prompt ("have you heard these? rate the ones you know").
+- after `ends_at` → **post** prompt ("how was the concert + each piece live").
+- **Prompt queue** (client): outstanding **post** reviews (ended, `post_done=false`)
+  first, then **pre** prompts for upcoming concerts. Surfaced as a banner on login.
+
+**RLS:** `concerts` / `concert_program` / `concert_reviews` are world-readable
+(concerts are searchable; reviews public); `concert_checkins` and
+`concert_piece_ratings` are **owner-only** (`auth.uid() = user_id`).
+
+**Aggregate views** (so the public sees scores without exposing private responses):
+
+```sql
+create view concert_score as            -- overall, from concert_reviews
+  select concert_id, count(*) ratings, round(avg(rating),2) avg_rating
+  from concert_reviews group by concert_id;
+
+create view concert_piece_score as      -- per-piece live score, from concert_piece_ratings
+  select concert_id, work_id, count(live_rating) live_count,
+         round(avg(live_rating),2) live_avg,
+         count(*) filter (where heard_before) heard_count
+  from concert_piece_ratings group by concert_id, work_id;
+
+grant select on concert_score, concert_piece_score to anon, authenticated;
+```
+
+These views are owned by `postgres`, so they bypass the owner-only RLS on the base
+tables and return only aggregates — individual `heard_before` / per-user ratings
+stay private.
