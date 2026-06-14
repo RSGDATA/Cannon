@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from './lib/supabase'
+import RecordingDetail from './RecordingDetail'
 
 type Review = { rating: number; author_id: string; profiles: { role: string } | null }
 type Credit = { artists: { name: string } | null; ensembles: { name: string } | null }
@@ -67,14 +68,14 @@ function Stars({ value, onRate }: { value: number; onRate: (n: number) => void }
   )
 }
 
-function Card({ item, myId, session, onRate, i = 0 }: { item: Item; myId?: string; session: Session | null; onRate: (id: string, n: number) => void; i?: number }) {
+function Card({ item, myId, session, onRate, onOpen, i = 0 }: { item: Item; myId?: string; session: Session | null; onRate: (id: string, n: number) => void; onOpen: (id: string) => void; i?: number }) {
   const { rec, work, composer } = item
   const s = scores(rec)
   const era = composer.era ?? 'default'
   const mine = rec.reviews.find((x) => x.author_id === myId)?.rating ?? 0
   return (
     <div className="card" style={{ animationDelay: `${i * 55}ms` }}>
-      <div className={`cover cover--${era}`}>
+      <div className={`cover cover--${era}`} onClick={() => onOpen(rec.id)}>
         <div className="cover-top">
           <span className="cover-glyph">♪</span>
           {work.catalog_system && <span className="cover-cat">{work.catalog_system} {work.catalog_number}</span>}
@@ -88,7 +89,7 @@ function Card({ item, myId, session, onRate, i = 0 }: { item: Item; myId?: strin
         <Pill icon="🎼" pct={s.critic} />
         <Pill icon="🎧" pct={s.audience} />
       </div>
-      <div className="card-title">{performers(rec)}</div>
+      <div className="card-title" style={{ cursor: 'pointer' }} onClick={() => onOpen(rec.id)}>{performers(rec)}</div>
       <div className="card-sub">{rec.year_recorded ?? ''}{rec.label ? ` · ${rec.label}` : ''}</div>
       {session && (
         <div className="card-rate">rate <Stars value={mine} onRate={(n) => onRate(rec.id, n)} /></div>
@@ -97,7 +98,7 @@ function Card({ item, myId, session, onRate, i = 0 }: { item: Item; myId?: strin
   )
 }
 
-function Row({ title, sub, items, ...rest }: { title: string; sub?: string; items: Item[]; myId?: string; session: Session | null; onRate: (id: string, n: number) => void }) {
+function Row({ title, sub, items, ...rest }: { title: string; sub?: string; items: Item[]; myId?: string; session: Session | null; onRate: (id: string, n: number) => void; onOpen: (id: string) => void }) {
   if (items.length === 0) return null
   return (
     <section className="row">
@@ -112,7 +113,7 @@ function Row({ title, sub, items, ...rest }: { title: string; sub?: string; item
   )
 }
 
-function Hero({ item, session, onRate, myId }: { item: Item; session: Session | null; onRate: (id: string, n: number) => void; myId?: string }) {
+function Hero({ item, session, onRate, onOpen, myId }: { item: Item; session: Session | null; onRate: (id: string, n: number) => void; onOpen: (id: string) => void; myId?: string }) {
   const { rec, work, composer } = item
   const s = scores(rec)
   const era = composer.era ?? 'default'
@@ -123,7 +124,7 @@ function Hero({ item, session, onRate, myId }: { item: Item; session: Session | 
     <section className={`hero hero--${era}`}>
       <div className="hero-main">
         <div className="hero-eyebrow"><span className="dot" /> #1 Top Rated</div>
-        <h1 className="hero-title">{work.title}</h1>
+        <h1 className="hero-title" style={{ cursor: 'pointer' }} onClick={() => onOpen(rec.id)}>{work.title}</h1>
         <div className="hero-sub"><strong>{composer.name}</strong> · {performers(rec)}{rec.year_recorded ? ` · ${rec.year_recorded}` : ''}</div>
         <div className="hero-scores">
           <div className="hero-score"><span style={{ fontSize: 24 }}>🎼</span><div><div className="big">{s.critic == null ? '—' : `${critic}%`}</div><div className="lab">Critics</div></div></div>
@@ -131,7 +132,7 @@ function Hero({ item, session, onRate, myId }: { item: Item; session: Session | 
         </div>
         {session && <div className="card-rate" style={{ color: 'rgba(255,255,255,0.9)' }}>your rating <Stars value={mine} onRate={(n) => onRate(rec.id, n)} /></div>}
       </div>
-      <div className={`hero-cover cover--${era}`}>♪</div>
+      <div className={`hero-cover cover--${era}`} style={{ cursor: 'pointer' }} title="View recording" onClick={() => onOpen(rec.id)}>♪</div>
     </section>
   )
 }
@@ -175,6 +176,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
   const [q, setQ] = useState('')
+  const [selectedId, setSelectedId] = useState<string | null>(null)
 
   const loadCatalog = useCallback(async () => {
     const { data, error } = await supabase.from('composers').select(CATALOG_SELECT).order('sort_name')
@@ -229,7 +231,7 @@ export default function App() {
     [allItems],
   )
   const myId = session?.user.id
-  const shared = { myId, session, onRate: rate }
+  const shared = { myId, session, onRate: rate, onOpen: setSelectedId }
 
   return (
     <>
@@ -246,11 +248,15 @@ export default function App() {
         <NavAuth session={session} />
       </nav>
 
+      {selectedId ? (
+        <RecordingDetail id={selectedId} session={session} onBack={() => { setSelectedId(null); loadCatalog() }} />
+      ) : (
+      <>
       {loading && <p className="notice" style={{ paddingTop: 24 }}>Loading catalog…</p>}
       {error && <p className="err-block" style={{ paddingTop: 24 }}>Error: {error}</p>}
 
       {!filtered && topRated[0] && (
-        <Hero item={topRated[0]} session={session} onRate={rate} myId={myId} />
+        <Hero item={topRated[0]} session={session} onRate={rate} onOpen={setSelectedId} myId={myId} />
       )}
 
       {filtered ? (
@@ -274,6 +280,8 @@ export default function App() {
         <p className="notice" style={{ padding: '8px clamp(14px,4vw,40px) 40px' }}>
           Sign in (<strong>alice@example.com</strong> / <strong>password123</strong>) to rate recordings.
         </p>
+      )}
+      </>
       )}
     </>
   )
